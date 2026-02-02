@@ -1,0 +1,376 @@
+'use client';
+
+import React from "react"
+
+import { useState, useEffect } from 'react';
+import { Sidebar } from '@/components/layout/sidebar';
+import { Header } from '@/components/layout/header';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { db, type PlatformAccount } from '@/lib/db';
+import { platformConfigs } from '@/lib/platforms/handlers';
+import { ArrowRight, Save } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+
+export default function CreateTaskPage() {
+  const router = useRouter();
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    sourceAccounts: [] as string[],
+    targetAccounts: [] as string[],
+    executionType: 'immediate' as const,
+    scheduleTime: '',
+    recurringPattern: 'daily' as const,
+  });
+
+  const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
+  const [selectedSourcePlatform, setSelectedSourcePlatform] = useState('');
+  const [selectedTargetPlatform, setSelectedTargetPlatform] = useState('');
+
+  useEffect(() => {
+    console.log('[v0] CreateTaskPage: Component mounted');
+    const users = Array.from((db as any).users.values());
+    console.log('[v0] CreateTaskPage: Found users:', users.length);
+    const user = users[0];
+    if (user) {
+      console.log('[v0] CreateTaskPage: User found:', user.id);
+      const userAccounts = db.getUserAccounts(user.id);
+      console.log('[v0] CreateTaskPage: User accounts:', userAccounts.length);
+      setAccounts(userAccounts);
+    } else {
+      console.warn('[v0] CreateTaskPage: No users found in database');
+    }
+  }, []);
+
+  const sourcePlatformAccounts = accounts.filter(
+    a => a.platformId === selectedSourcePlatform
+  );
+  const targetPlatformAccounts = accounts.filter(
+    a => a.platformId === selectedTargetPlatform
+  );
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    console.log('[v0] handleSubmit: Form submitted');
+    console.log('[v0] formData:', formData);
+
+    if (!formData.name || formData.sourceAccounts.length === 0 || formData.targetAccounts.length === 0) {
+      console.warn('[v0] handleSubmit: Validation failed - missing required fields');
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    const users = Array.from((db as any).users.values());
+    console.log('[v0] handleSubmit: Users found:', users.length);
+    const user = users[0];
+
+    if (user) {
+      console.log('[v0] handleSubmit: Creating task for user:', user.id);
+      try {
+        const taskId = db.createTask({
+          userId: user.id,
+          name: formData.name,
+          description: formData.description,
+          sourceAccounts: formData.sourceAccounts,
+          targetAccounts: formData.targetAccounts,
+          contentType: 'text',
+          status: 'active',
+          executionType: formData.executionType,
+          scheduleTime: formData.scheduleTime ? new Date(formData.scheduleTime) : undefined,
+          recurringPattern: formData.recurringPattern,
+        });
+        console.log('[v0] handleSubmit: Task created successfully:', taskId);
+        router.push('/tasks');
+      } catch (error) {
+        console.error('[v0] handleSubmit: Error creating task:', error);
+      }
+    } else {
+      console.error('[v0] handleSubmit: No user found');
+    }
+  };
+
+  const toggleSourceAccount = (accountId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      sourceAccounts: prev.sourceAccounts.includes(accountId)
+        ? prev.sourceAccounts.filter(id => id !== accountId)
+        : [...prev.sourceAccounts, accountId],
+    }));
+  };
+
+  const toggleTargetAccount = (accountId: string) => {
+    setFormData(prev => ({
+      ...prev,
+      targetAccounts: prev.targetAccounts.includes(accountId)
+        ? prev.targetAccounts.filter(id => id !== accountId)
+        : [...prev.targetAccounts, accountId],
+    }));
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Sidebar />
+      <Header />
+
+      <main className="ml-64 mt-16 p-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-foreground mb-2">
+            Create New Task
+          </h1>
+          <p className="text-muted-foreground">
+            Set up an automation task to transfer content between platforms
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="max-w-4xl space-y-6">
+          {/* Basic Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Basic Information</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Task Name *
+                </label>
+                <Input
+                  placeholder="e.g., Facebook to Twitter Daily Sync"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Description
+                </label>
+                <Textarea
+                  placeholder="Describe what this task does..."
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Source Selection */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Select Source Account(s)</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Source Platform
+                </label>
+                <Select value={selectedSourcePlatform} onValueChange={setSelectedSourcePlatform}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose source platform" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(platformConfigs).map(([key, config]) => (
+                      <SelectItem key={key} value={key}>
+                        {config.icon} {config.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedSourcePlatform && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Accounts
+                  </label>
+                  {sourcePlatformAccounts.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">
+                      No accounts connected for this platform
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {sourcePlatformAccounts.map(account => (
+                        <div key={account.id} className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            id={`source-${account.id}`}
+                            checked={formData.sourceAccounts.includes(account.id)}
+                            onChange={() => toggleSourceAccount(account.id)}
+                            className="rounded border-border"
+                          />
+                          <label
+                            htmlFor={`source-${account.id}`}
+                            className="text-sm cursor-pointer flex-1"
+                          >
+                            <span className="font-medium">{account.accountName}</span>
+                            <span className="text-muted-foreground">
+                              {' '}(@{account.accountUsername})
+                            </span>
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Target Selection */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Select Target Account(s)</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Target Platform(s)
+                </label>
+                <Select value={selectedTargetPlatform} onValueChange={setSelectedTargetPlatform}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose target platform" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(platformConfigs).map(([key, config]) => (
+                      <SelectItem key={key} value={key}>
+                        {config.icon} {config.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedTargetPlatform && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Accounts
+                  </label>
+                  {targetPlatformAccounts.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">
+                      No accounts connected for this platform
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {targetPlatformAccounts.map(account => (
+                        <div key={account.id} className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            id={`target-${account.id}`}
+                            checked={formData.targetAccounts.includes(account.id)}
+                            onChange={() => toggleTargetAccount(account.id)}
+                            className="rounded border-border"
+                          />
+                          <label
+                            htmlFor={`target-${account.id}`}
+                            className="text-sm cursor-pointer flex-1"
+                          >
+                            <span className="font-medium">{account.accountName}</span>
+                            <span className="text-muted-foreground">
+                              {' '}(@{account.accountUsername})
+                            </span>
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Execution Settings */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Execution Settings</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Execution Type
+                </label>
+                <Select
+                  value={formData.executionType}
+                  onValueChange={(value: any) =>
+                    setFormData(prev => ({ ...prev, executionType: value }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="immediate">Immediate</SelectItem>
+                    <SelectItem value="scheduled">Scheduled</SelectItem>
+                    <SelectItem value="recurring">Recurring</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {formData.executionType === 'scheduled' && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Schedule Time
+                  </label>
+                  <Input
+                    type="datetime-local"
+                    value={formData.scheduleTime}
+                    onChange={(e) =>
+                      setFormData(prev => ({ ...prev, scheduleTime: e.target.value }))
+                    }
+                  />
+                </div>
+              )}
+
+              {formData.executionType === 'recurring' && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Recurrence Pattern
+                  </label>
+                  <Select
+                    value={formData.recurringPattern}
+                    onValueChange={(value: any) =>
+                      setFormData(prev => ({ ...prev, recurringPattern: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Actions */}
+          <div className="flex gap-4">
+            <Button type="submit" size="lg">
+              <Save size={20} className="mr-2" />
+              Create Task
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => router.push('/tasks')}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </main>
+    </div>
+  );
+}
