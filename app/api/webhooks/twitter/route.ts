@@ -32,8 +32,16 @@ export async function POST(req: NextRequest) {
     const payload = await req.json();
     console.log('[TwitterWebhook] Received event:', JSON.stringify(payload, null, 2));
     
-    // logic to handle account_activity events
-    // For now, we just log it. In a real scenario, we would parse tweet_create_events etc.
+    // Handle tweet_create_events (Account Activity API)
+    if (payload.tweet_create_events) {
+      const { twitterStream } = await import('@/lib/services/twitter-stream');
+      for (const tweet of payload.tweet_create_events) {
+        // Adapt AA API payload to handleEvent format or call processing directly
+        // The streaming webhook usually uses the Search Stream, 
+        // but if the user wants Webhooks, we should bridge it.
+        await twitterStream.handleEvent({ data: tweet, includes: payload.includes, matching_rules: [{ tag: 'webhook' }] });
+      }
+    }
     
     return NextResponse.json({ success: true });
   } catch (error) {

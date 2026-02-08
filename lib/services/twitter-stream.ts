@@ -129,6 +129,9 @@ export class TwitterStream {
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
       console.error('[TwitterStream] Failed to add rules:', res.statusText, JSON.stringify(errorData));
+      if (res.status === 403) {
+        console.error('[TwitterStream] 403 Forbidden - Check if your Bearer Token has the correct permissions (Essential vs Pro)');
+      }
     }
   }
 
@@ -166,6 +169,11 @@ export class TwitterStream {
         buffer = buffer.slice(idx + 1);
         if (!line) continue;
         try {
+          if (line.startsWith('{"errors"')) {
+            console.error('[TwitterStream] Stream error response:', line);
+            this.running = false;
+            break;
+          }
           const event = JSON.parse(line);
           await this.handleEvent(event);
         } catch (err) {
@@ -175,7 +183,7 @@ export class TwitterStream {
     }
   }
 
-  private async handleEvent(event: any) {
+  public async handleEvent(event: any) {
     if (!event?.data?.id) return;
 
     const tweet = event.data;
