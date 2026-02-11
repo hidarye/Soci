@@ -118,7 +118,7 @@ export class TwitterClient {
     return { ok: true, body: text };
   }
 
-  private async uploadInit(totalBytes: number, mediaType: string, mediaCategory?: string): Promise<string> {
+  private async uploadInit(totalBytes: number, mediaType: string, mediaCategory?: string): Promise<{ mediaId: string; processingInfo?: any }> {
     const formData = new FormData();
     formData.append('command', 'INIT');
     formData.append('total_bytes', String(totalBytes));
@@ -144,13 +144,13 @@ export class TwitterClient {
       throw new Error(`Twitter API error: ${response.status} ${response.statusText} ${text}`.trim());
     }
 
-    const data = (await response.json()) as { media_id_string?: string; media_id?: string };
+    const data = (await response.json()) as { media_id_string?: string; media_id?: string; processing_info?: any };
     const mediaId = data.media_id_string || data.media_id;
     if (!mediaId) {
       throw new Error('Twitter media INIT failed');
     }
     debugLog('Twitter media INIT success', { mediaId, totalBytes, mediaType, mediaCategory });
-    return mediaId;
+    return { mediaId: mediaId.toString(), processingInfo: data.processing_info };
   }
 
   private async uploadAppend(mediaId: string, segmentIndex: number, chunk: Buffer) {
@@ -189,33 +189,34 @@ export class TwitterClient {
     const isGif = mediaType === 'image/gif';
     const mediaCategory = isVideo ? 'tweet_video' : isGif ? 'tweet_gif' : 'tweet_image';
 
+    const { mediaId, processingInfo } = await this.uploadInit(totalBytes, mediaType, mediaCategory);
+
     if (!isVideo) {
       const buffer = await fs.readFile(filePath);
-      return this.uploadMedia(buffer, mediaType, mediaCategory);
-    }
-
-    const mediaId = await this.uploadInit(totalBytes, mediaType, mediaCategory);
-    const chunkSize = 5 * 1024 * 1024;
-    const handle = await fs.open(filePath, 'r');
-    try {
-      let segment = 0;
-      let offset = 0;
-      while (offset < totalBytes) {
-        const length = Math.min(chunkSize, totalBytes - offset);
-        const buffer = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, offset);
-        if (bytesRead === 0) break;
-        const chunk = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
-        await this.uploadAppend(mediaId, segment, chunk);
-        segment += 1;
-        offset += bytesRead;
+      await this.uploadAppend(mediaId, 0, buffer);
+    } else {
+      const chunkSize = 5 * 1024 * 1024;
+      const handle = await fs.open(filePath, 'r');
+      try {
+        let segment = 0;
+        let offset = 0;
+        while (offset < totalBytes) {
+          const length = Math.min(chunkSize, totalBytes - offset);
+          const buffer = Buffer.alloc(length);
+          const { bytesRead } = await handle.read(buffer, 0, length, offset);
+          if (bytesRead === 0) break;
+          const chunk = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
+          await this.uploadAppend(mediaId, segment, chunk);
+          segment += 1;
+          offset += bytesRead;
+        }
+      } finally {
+        await handle.close();
       }
-    } finally {
-      await handle.close();
     }
 
     const finalize = await this.uploadFinalize(mediaId);
-    let info = finalize?.processing_info;
+    let info = finalize?.processing_info || processingInfo;
     let attempts = 0;
     while (info && (info.state === 'pending' || info.state === 'in_progress')) {
       if (attempts > 10) {

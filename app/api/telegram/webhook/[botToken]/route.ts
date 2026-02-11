@@ -109,12 +109,10 @@ export async function POST(
   const secretHeader = request.headers.get('x-telegram-bot-api-secret-token');
   const expectedSecret = (account.credentials as any)?.webhookSecret;
   if (expectedSecret && secretHeader !== expectedSecret) {
-    debugLog('Telegram webhook secret mismatch (bypassing for reset)', { 
+    debugLog('Telegram webhook secret mismatch (bypassing)', { 
       accountId: account.id,
-      hasHeader: Boolean(secretHeader),
-      hasExpected: Boolean(expectedSecret)
+      hasHeader: Boolean(secretHeader)
     });
-    // Temporary bypass to allow re-registration and debugging
   }
 
   let update: TelegramUpdate;
