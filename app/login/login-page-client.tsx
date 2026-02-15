@@ -2,11 +2,10 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, MailWarning } from 'lucide-react';
 import { AuthShell } from '@/components/auth/auth-shell';
-import { WaitingSplash } from '@/components/layout/waiting-splash';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -34,14 +33,14 @@ export default function LoginPageClient({
   reset,
   registered,
 }: LoginPageClientProps) {
-  const router = useRouter();
   const { locale, t } = useLanguage();
   const isArabic = locale === 'ar';
   const normalizedQueryEmail = String(queryEmail || '').trim().toLowerCase();
   const hasQueryEmail = Boolean(normalizedQueryEmail && isValidEmail(normalizedQueryEmail));
   const [email, setEmail] = useState(hasQueryEmail ? normalizedQueryEmail : '');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberPrefsReady, setRememberPrefsReady] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
@@ -53,14 +52,19 @@ export default function LoginPageClient({
   const [loading, setLoading] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const creditLine = `${t('auth.creditLine', 'Programming & Design: Oday Algholy')} - ${t('auth.rightsReserved', 'All rights reserved')}`;
+  const isBusy = loading || redirecting;
 
   useEffect(() => {
-    const rememberEnabled = window.localStorage.getItem(REMEMBER_ENABLED_KEY) === '1';
-    const rememberedEmail = window.localStorage.getItem(REMEMBER_EMAIL_KEY) || '';
-    setRememberMe(rememberEnabled);
-    // If the user navigated here with a specific email in the URL, prefer that.
-    if (!hasQueryEmail && rememberEnabled && rememberedEmail) {
-      setEmail(rememberedEmail);
+    try {
+      const rememberEnabled = window.localStorage.getItem(REMEMBER_ENABLED_KEY) === '1';
+      const rememberedEmail = window.localStorage.getItem(REMEMBER_EMAIL_KEY) || '';
+      setRememberMe(rememberEnabled);
+      // If the user navigated here with a specific email in the URL, prefer that.
+      if (!hasQueryEmail && rememberEnabled && rememberedEmail) {
+        setEmail(rememberedEmail);
+      }
+    } finally {
+      setRememberPrefsReady(true);
     }
   }, [hasQueryEmail]);
 
@@ -84,7 +88,7 @@ export default function LoginPageClient({
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loading || redirecting) return;
+    if (isBusy) return;
     setError('');
     setInfoMessage('');
     setEmailError('');
@@ -104,14 +108,26 @@ export default function LoginPageClient({
       return;
     }
 
-    setLoading(true);
+    flushSync(() => setLoading(true));
 
-    const res = await signIn('credentials', {
-      email: normalizedEmail,
-      password,
-      redirect: false,
-      callbackUrl,
-    });
+    let res;
+    try {
+      res = await signIn('credentials', {
+        email: normalizedEmail,
+        password,
+        redirect: false,
+        callbackUrl,
+      });
+    } catch (signInError) {
+      console.error('[auth] signIn failed', signInError);
+      setLoading(false);
+      setError(
+        isArabic
+          ? 'تعذر إتمام تسجيل الدخول حالياً. تحقق من الاتصال وحاول مرة أخرى.'
+          : 'Unable to sign in right now. Check your connection and try again.'
+      );
+      return;
+    }
 
     if (res?.error) {
       setLoading(false);
@@ -131,14 +147,25 @@ export default function LoginPageClient({
       window.localStorage.removeItem(REMEMBER_ENABLED_KEY);
       window.localStorage.removeItem(REMEMBER_EMAIL_KEY);
     }
+    setLoading(false);
     setRedirecting(true);
-    router.replace(callbackUrl);
-    router.refresh();
+    const redirectTarget = (() => {
+      const fallback = callbackUrl || '/';
+      const candidate = typeof res?.url === 'string' ? res.url : fallback;
+      try {
+        const parsed = new URL(candidate, window.location.origin);
+        if (parsed.origin !== window.location.origin) return fallback;
+        return `${parsed.pathname}${parsed.search}${parsed.hash}` || fallback;
+      } catch {
+        return fallback;
+      }
+    })();
+    window.location.replace(redirectTarget);
   };
 
   const resendVerification = async () => {
     if (!email.trim() || resendingVerification) return;
-    setResendingVerification(true);
+    flushSync(() => setResendingVerification(true));
     setError('');
     setInfoMessage('');
     try {
@@ -167,21 +194,6 @@ export default function LoginPageClient({
     }
   };
 
-  if (loading || redirecting) {
-    return (
-      <WaitingSplash
-        active
-        title={isArabic ? 'جاري تسجيل الدخول' : 'Signing In'}
-        subtitle={
-          isArabic
-            ? 'جاري التحقق من بيانات الدخول وفتح لوحة التحكم...'
-            : 'Verifying credentials and opening your dashboard...'
-        }
-        credit={creditLine}
-      />
-    );
-  }
-
   return (
     <AuthShell
       title={isArabic ? 'تسجيل الدخول' : 'Sign In'}
@@ -193,12 +205,6 @@ export default function LoginPageClient({
       logoSize={100}
       logoShowText={false}
     >
-      <WaitingSplash
-        active={resendingVerification}
-        title={isArabic ? 'إرسال رمز التحقق' : 'Sending Verification Code'}
-        subtitle={isArabic ? 'جاري إرسال رمز تحقق جديد...' : 'Sending a new verification code...'}
-        credit={creditLine}
-      />
       <form onSubmit={onSubmit} className="space-y-5">
         <div className="space-y-2">
           <Label htmlFor="login-email">{isArabic ? 'البريد الإلكتروني' : 'Email'}</Label>
@@ -214,6 +220,7 @@ export default function LoginPageClient({
             placeholder={isArabic ? 'you@example.com' : 'you@example.com'}
             autoComplete="email"
             aria-invalid={Boolean(emailError)}
+            disabled={isBusy}
             required
           />
           {emailError ? <p className="text-xs text-destructive">{emailError}</p> : null}
@@ -235,6 +242,7 @@ export default function LoginPageClient({
               placeholder={isArabic ? '••••••••' : '••••••••'}
               autoComplete="current-password"
               aria-invalid={Boolean(passwordError)}
+              disabled={isBusy}
               required
               className="pr-11"
             />
@@ -245,6 +253,7 @@ export default function LoginPageClient({
               className="absolute right-1 top-1 h-8 w-8"
               aria-label={showPassword ? (isArabic ? 'إخفاء كلمة المرور' : 'Hide password') : (isArabic ? 'إظهار كلمة المرور' : 'Show password')}
               onClick={() => setShowPassword((prev) => !prev)}
+              disabled={isBusy}
             >
               {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
             </Button>
@@ -258,16 +267,21 @@ export default function LoginPageClient({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <label htmlFor="login-remember-me" className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
-            <input
-              id="login-remember-me"
-              type="checkbox"
-              checked={rememberMe}
-              onChange={(e) => setRememberMe(e.target.checked)}
-              className="h-4 w-4 rounded border-input accent-primary"
-            />
-            {isArabic ? 'تذكرني' : 'Remember me'}
-          </label>
+          {rememberPrefsReady ? (
+            <label htmlFor="login-remember-me" className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
+              <input
+                id="login-remember-me"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 rounded border-input accent-primary"
+                disabled={isBusy}
+              />
+              {isArabic ? 'تذكرني' : 'Remember me'}
+            </label>
+          ) : (
+            <span className="h-5" />
+          )}
           <Link href="/forgot-password" className="text-xs font-medium text-primary underline-offset-4 hover:underline">
             {isArabic ? 'نسيت كلمة المرور؟' : 'Forgot password?'}
           </Link>
@@ -309,8 +323,12 @@ export default function LoginPageClient({
           </div>
         )}
 
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading
+        <Button type="submit" className="w-full" disabled={isBusy}>
+          {redirecting
+            ? isArabic
+              ? 'جاري التحويل...'
+              : 'Redirecting...'
+            : loading
             ? isArabic
               ? 'جاري تسجيل الدخول...'
               : 'Signing in...'

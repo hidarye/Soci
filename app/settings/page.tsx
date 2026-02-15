@@ -172,8 +172,6 @@ export default function SettingsPage() {
     setSidebarCollapsed,
     reducedMotion,
     setReducedMotion,
-    density,
-    setDensity,
   } = useShellPreferences();
   const [mounted, setMounted] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<ManagedPlatformId>('twitter');
@@ -504,21 +502,6 @@ export default function SettingsPage() {
               <CardTitle>Workspace Experience</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-card/35 p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="font-medium text-foreground">
-                    Compact Density
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Reduce spacing for high-throughput operator workflows.
-                  </p>
-                </div>
-                <Switch
-                  checked={density === 'compact'}
-                  onCheckedChange={(checked) => setDensity(checked ? 'compact' : 'comfortable')}
-                />
-              </div>
-
               <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-card/35 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="font-medium text-foreground">

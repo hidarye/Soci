@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { AuthShell } from '@/components/auth/auth-shell';
-import { WaitingSplash } from '@/components/layout/waiting-splash';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -82,7 +82,7 @@ export default function ResetPasswordPageClient({ token, queryEmail, queryCode }
       return;
     }
 
-    setSubmitting(true);
+    flushSync(() => setSubmitting(true));
     try {
       const payload = normalizedToken
         ? { token: normalizedToken, password }
@@ -110,11 +110,6 @@ export default function ResetPasswordPageClient({ token, queryEmail, queryCode }
 
   return (
     <AuthShell title="Reset Password" description="Set a new password using your email reset code.">
-      <WaitingSplash
-        active={submitting}
-        title="Updating Password"
-        subtitle="Applying your new password and updating account security..."
-      />
       <form onSubmit={onSubmit} className="space-y-5">
         {!normalizedToken ? (
           <>

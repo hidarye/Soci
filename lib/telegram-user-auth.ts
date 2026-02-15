@@ -160,7 +160,7 @@ export async function verifyTelegramUserAuth(params: {
       throw new Error('Telegram account sign-up is required first in Telegram app');
     }
 
-    const sessionString = state.client.session.save();
+    const sessionString = (state.client.session as unknown as StringSession).save();
     const profile = profileFromUser(result.user, sessionString);
     pendingAuthStates.delete(authId);
     await state.client.disconnect().catch(() => undefined);
@@ -193,7 +193,7 @@ export async function verifyTelegramUserAuth(params: {
       throw new Error(firstPasswordError || 'Telegram 2FA verification failed');
     }
 
-    const sessionString = state.client.session.save();
+    const sessionString = (state.client.session as unknown as StringSession).save();
     const profile = profileFromUser(user, sessionString);
     pendingAuthStates.delete(authId);
     await state.client.disconnect().catch(() => undefined);
@@ -212,7 +212,7 @@ export async function getTelegramUserProfileFromSession(sessionString: string): 
     if (!me) {
       throw new Error('Telegram session is not authorized');
     }
-    const refreshedSession = client.session.save();
+    const refreshedSession = (client.session as unknown as StringSession).save();
     return profileFromUser(me, refreshedSession);
   } catch (error) {
     throw new Error(`Failed to verify Telegram session: ${getTelegramErrorMessage(error)}`);
@@ -220,4 +220,3 @@ export async function getTelegramUserProfileFromSession(sessionString: string): 
     await client.disconnect().catch(() => undefined);
   }
 }
-

@@ -16,6 +16,8 @@ const AR_TRANSLATIONS: Pair[] = [
   ['Resend Code', 'إعادة إرسال الرمز'],
   ['Enter Verification Code', 'إدخال رمز التحقق'],
   ['Verification Required', 'التحقق مطلوب'],
+  ['Unable to create account with provided details.', 'تعذر إنشاء الحساب بالبيانات المقدمة.'],
+  ['This email is already registered. Try signing in, or reset your password.', 'هذا البريد الإلكتروني مسجل بالفعل. جرّب تسجيل الدخول أو إعادة تعيين كلمة المرور.'],
   ['Password', 'كلمة المرور'],
   ['Confirm Password', 'تأكيد كلمة المرور'],
   ['Current password', 'كلمة المرور الحالية'],

@@ -19,6 +19,7 @@ const PUBLIC_PATHS = new Set([
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const forceLogin = request.nextUrl.searchParams.get('forceLogin') === '1';
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-request-id', requestId);
@@ -52,6 +53,9 @@ export async function middleware(request: NextRequest) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
   if (PUBLIC_PATHS.has(pathname)) {
     if (!AUTH_PATHS.has(pathname)) {
+      return next();
+    }
+    if (forceLogin) {
       return next();
     }
     if (!token) return next();

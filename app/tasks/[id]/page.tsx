@@ -491,7 +491,7 @@ export default function TaskDetailPage() {
               )}
             </Button>
 
-            <Button variant="outline" size="icon" onClick={() => setIsEditing(v => !v)}>
+            <Button variant="outline" size="icon" onClick={() => router.push(`/tasks/${taskId}/edit`)}>
               <Edit2 size={18} />
             </Button>
 

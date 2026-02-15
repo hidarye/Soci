@@ -20,30 +20,113 @@ const SHELL_DENSITY_KEY = 'socialflow_shell_density_v1';
 
 const ShellContext = React.createContext<ShellContextValue | null>(null);
 
-export function ShellProvider({ children }: { children: React.ReactNode }) {
-  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-  const [reducedMotion, setReducedMotion] = React.useState(false);
-  const [density, setDensity] = React.useState<DensityMode>('comfortable');
+type InitialShellState = {
+  sidebarCollapsed: boolean;
+  reducedMotion: boolean;
+  density: DensityMode;
+  isCompactViewport: boolean;
+};
 
-  React.useEffect(() => {
+function readInitialShellState(): InitialShellState {
+  if (typeof window === 'undefined') {
+    return {
+      sidebarCollapsed: false,
+      reducedMotion: false,
+      density: 'comfortable',
+      isCompactViewport: false,
+    };
+  }
+
+  const root = document.documentElement;
+  const isCompactViewport = window.matchMedia('(max-width: 767px)').matches;
+  const isTabletViewport = window.matchMedia('(min-width: 768px) and (max-width: 1023px)').matches;
+
+  let sidebarCollapsed = root.dataset.shellSidebarCollapsed === '1';
+  if (!sidebarCollapsed) {
     try {
-      const rawCollapsed = window.localStorage.getItem(SHELL_SIDEBAR_KEY);
-      const rawReducedMotion = window.localStorage.getItem(SHELL_REDUCED_MOTION_KEY);
-      const rawDensity = window.localStorage.getItem(SHELL_DENSITY_KEY);
-
-      setSidebarCollapsed(rawCollapsed === '1');
-      setReducedMotion(rawReducedMotion === '1');
-      if (rawDensity === 'comfortable' || rawDensity === 'compact') {
-        setDensity(rawDensity);
-      }
+      sidebarCollapsed = window.localStorage.getItem(SHELL_SIDEBAR_KEY) === '1';
     } catch {
       // ignore storage failures
     }
+  }
+  if (isTabletViewport) {
+    sidebarCollapsed = true;
+  }
+
+  let reducedMotion = root.getAttribute('data-reduced-motion') === 'true';
+  let density: DensityMode = root.getAttribute('data-density') === 'compact' ? 'compact' : 'comfortable';
+  try {
+    if (!reducedMotion) {
+      reducedMotion = window.localStorage.getItem(SHELL_REDUCED_MOTION_KEY) === '1';
+    }
+    const rawDensity = window.localStorage.getItem(SHELL_DENSITY_KEY);
+    if (rawDensity === 'comfortable' || rawDensity === 'compact') {
+      density = rawDensity;
+    }
+  } catch {
+    // ignore storage failures
+  }
+
+  return {
+    sidebarCollapsed,
+    reducedMotion,
+    density,
+    isCompactViewport,
+  };
+}
+
+export function ShellProvider({ children }: { children: React.ReactNode }) {
+  const initialStateRef = React.useRef<InitialShellState | null>(null);
+  if (initialStateRef.current === null) {
+    initialStateRef.current = readInitialShellState();
+  }
+  const initialState = initialStateRef.current;
+
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(initialState.sidebarCollapsed);
+  const [reducedMotion, setReducedMotion] = React.useState(initialState.reducedMotion);
+  const [density, setDensity] = React.useState<DensityMode>(initialState.density);
+  const [isCompactViewport, setIsCompactViewport] = React.useState(initialState.isCompactViewport);
+  const [viewportReady, setViewportReady] = React.useState(false);
+
+  React.useEffect(() => {
+    // Compact behavior is mobile-only. Tablets keep desktop-style spacing.
+    const compactQuery = window.matchMedia('(max-width: 767px)');
+    const syncCompactViewport = () => {
+      setIsCompactViewport(compactQuery.matches);
+      setViewportReady(true);
+    };
+    syncCompactViewport();
+    compactQuery.addEventListener('change', syncCompactViewport);
+    return () => {
+      compactQuery.removeEventListener('change', syncCompactViewport);
+    };
   }, []);
 
   React.useEffect(() => {
+    const tabletShellQuery = window.matchMedia('(min-width: 768px) and (max-width: 1023px)');
+    const syncTabletShell = () => {
+      // Keep tablet portrait shell compact to prevent header/content overlap.
+      if (tabletShellQuery.matches) {
+        setSidebarCollapsed(true);
+      }
+    };
+
+    syncTabletShell();
+    tabletShellQuery.addEventListener('change', syncTabletShell);
+    return () => {
+      tabletShellQuery.removeEventListener('change', syncTabletShell);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!viewportReady) return;
     const root = document.documentElement;
-    root.style.setProperty('--shell-sidebar-width', sidebarCollapsed ? '5.5rem' : '18rem');
+    const compactCollapsed = isCompactViewport && sidebarCollapsed;
+    root.style.setProperty('--shell-sidebar-width', compactCollapsed ? '0rem' : sidebarCollapsed ? '5.5rem' : '18rem');
+    root.style.setProperty('--shell-content-offset', compactCollapsed ? '0rem' : sidebarCollapsed ? '6.25rem' : '18.75rem');
+    root.style.setProperty('--shell-sidebar-border-width', compactCollapsed ? '0px' : '1px');
+    root.dataset.shellSidebarCollapsed = sidebarCollapsed ? '1' : '0';
+    root.setAttribute('data-shell-ready', '1');
     root.setAttribute('data-density', density);
     root.setAttribute('data-reduced-motion', reducedMotion ? 'true' : 'false');
 
@@ -54,7 +137,7 @@ export function ShellProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore storage failures
     }
-  }, [sidebarCollapsed, reducedMotion, density]);
+  }, [sidebarCollapsed, reducedMotion, density, isCompactViewport, viewportReady]);
 
   const value = React.useMemo<ShellContextValue>(
     () => ({

@@ -1,36 +1,13 @@
 import React from "react"
 import type { Metadata } from 'next'
 import { Analytics } from '@vercel/analytics/next'
-import { IBM_Plex_Mono, Space_Grotesk, Tajawal } from 'next/font/google'
 import Providers from './providers'
 import { Toaster } from 'sonner'
-import { SplashOverlay } from '@/components/layout/splash-overlay'
-import { GlobalShellEnhancements } from '@/components/layout/global-shell-enhancements'
+import { DeferredGlobalShellEnhancements } from '@/components/layout/deferred-global-shell-enhancements'
 import { PwaRegistration } from '@/components/pwa/pwa-registration'
 import { InstallAppPrompt } from '@/components/pwa/install-app-prompt'
-import { AppLogo } from '@/components/common/app-logo'
+import { ClientRecovery } from '@/components/runtime/client-recovery'
 import './globals.css'
-
-const displayFont = Space_Grotesk({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-display',
-  display: 'swap',
-})
-
-const monoFont = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-mono-display',
-  display: 'swap',
-})
-
-const arabicFont = Tajawal({
-  subsets: ['arabic'],
-  weight: ['400', '500', '700'],
-  variable: '--font-arabic',
-  display: 'swap',
-})
 
 export const metadata: Metadata = {
   title: 'SocialFlow - Social Media Automation Platform',
@@ -82,35 +59,63 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${displayFont.variable} ${monoFont.variable} ${arabicFont.variable} font-sans antialiased`}>
+      <head>
         <script
-          // Runs before the main UI is parsed so the splash can cover the first paint.
-          // If the splash was already seen in this browser tab session, it stays hidden.
+          // Runs before the main UI is parsed:
+          // - Applies a theme class early to avoid FOUC (we use `.dark` CSS variables).
+          // - Seeds shell layout/theme attributes before hydration.
           dangerouslySetInnerHTML={{
             __html: `(() => {
   try {
-    var key = 'socialflow_splash_seen_v2';
-    var seen = sessionStorage.getItem(key) === '1';
-    if (!seen) document.documentElement.dataset.bootSplash = '1';
+    var root = document.documentElement;
+    // Theme init (compatible with next-themes defaults)
+    var storedTheme = localStorage.getItem('theme');
+    var preferredDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var resolvedTheme = storedTheme === 'dark' || storedTheme === 'light'
+      ? storedTheme
+      : (preferredDark ? 'dark' : 'light');
+    if (resolvedTheme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+
+    var shellSidebarKey = 'socialflow_shell_sidebar_collapsed_v1';
+    var shellReducedMotionKey = 'socialflow_shell_reduced_motion_v1';
+    var shellDensityKey = 'socialflow_shell_density_v1';
+    root.setAttribute('data-shell-ready', '0');
+    // Route loading UI is handled by app/loading.tsx only when Next.js has real pending work.
+    root.dataset.bootSplash = '0';
+
+    // Shell init: apply sidebar/density/reduced-motion before first paint to avoid layout flash.
+    var isCompactViewport = window.matchMedia && window.matchMedia('(max-width: 767px)').matches;
+    var isTabletViewport = window.matchMedia && window.matchMedia('(min-width: 768px) and (max-width: 1023px)').matches;
+    var rawCollapsed = localStorage.getItem(shellSidebarKey);
+    var sidebarCollapsed = rawCollapsed === '1';
+    if (isTabletViewport) sidebarCollapsed = true;
+    var shellSidebarWidth = isCompactViewport ? '0rem' : (sidebarCollapsed ? '5.5rem' : '18rem');
+    var shellContentOffset = isCompactViewport ? '0rem' : (sidebarCollapsed ? '6.25rem' : '18.75rem');
+    var shellBorderWidth = isCompactViewport ? '0px' : '1px';
+    root.style.setProperty('--shell-sidebar-width', shellSidebarWidth);
+    root.style.setProperty('--shell-content-offset', shellContentOffset);
+    root.style.setProperty('--shell-sidebar-border-width', shellBorderWidth);
+    root.dataset.shellSidebarCollapsed = sidebarCollapsed ? '1' : '0';
+
+    var rawReducedMotion = localStorage.getItem(shellReducedMotionKey);
+    if (rawReducedMotion === '1' || rawReducedMotion === '0') {
+      root.setAttribute('data-reduced-motion', rawReducedMotion === '1' ? 'true' : 'false');
+    }
+    var rawDensity = localStorage.getItem(shellDensityKey);
+    if (rawDensity === 'comfortable' || rawDensity === 'compact') {
+      root.setAttribute('data-density', rawDensity);
+    }
   } catch {}
 })();`,
           }}
         />
-        <div className="splash-overlay boot-splash" role="status" aria-live="polite" aria-busy="true">
-          <div className="splash-overlay__glow" />
-          <div className="splash-overlay__panel">
-            <div className="splash-overlay__ring" />
-            <div className="splash-overlay__logo">
-              <AppLogo size={72} showText={false} variant="splash" splashSurface={false} className="!m-0" />
-            </div>
-            <h1 className="splash-overlay__title">SocialFlow Orbit</h1>
-            <p className="splash-overlay__subtitle">Preparing your automation workspace...</p>
-          </div>
-        </div>
+      </head>
+      <body className="font-sans antialiased">
         <Providers>
+          <ClientRecovery />
           <PwaRegistration />
-          <SplashOverlay />
-          <GlobalShellEnhancements />
+          <DeferredGlobalShellEnhancements />
           <InstallAppPrompt />
           {children}
         </Providers>

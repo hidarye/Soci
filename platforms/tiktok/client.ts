@@ -48,7 +48,7 @@ export class TikTokClient {
 
       // Upload the video file
       const uploadFormData = new FormData()
-      const videoBlob = new Blob([videoData], { type: 'video/mp4' })
+      const videoBlob = new Blob([new Uint8Array(videoData)], { type: 'video/mp4' })
       uploadFormData.append('file', videoBlob)
 
       const uploadResponse = await fetch(uploadUrl, {

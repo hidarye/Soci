@@ -1,11 +1,11 @@
 import LoginPageClient from './login-page-client';
 
 type PageProps = {
-  searchParams?: Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 function readParam(
-  searchParams: PageProps['searchParams'],
+  searchParams: Record<string, string | string[] | undefined> | undefined,
   key: string
 ): string {
   const value = searchParams?.[key];
@@ -14,13 +14,25 @@ function readParam(
   return '';
 }
 
-export default function LoginPage({ searchParams }: PageProps) {
-  const rawCallback = readParam(searchParams, 'callbackUrl');
-  const callbackUrl = rawCallback.startsWith('/') ? rawCallback : '/';
-  const email = readParam(searchParams, 'email');
-  const verified = readParam(searchParams, 'verified') === '1';
-  const reset = readParam(searchParams, 'reset') === '1';
-  const registered = readParam(searchParams, 'registered') === '1';
+function normalizeCallbackPath(raw: string): string {
+  const candidate = raw.startsWith('/') ? raw : '/';
+  if (candidate === '/dashboard') return '/';
+  if (candidate.startsWith('/dashboard/accounts')) return '/accounts';
+  if (candidate.startsWith('/dashboard/analytics')) return '/analytics';
+  if (candidate.startsWith('/dashboard/create-task') || candidate.startsWith('/dashboard/create-post')) {
+    return '/tasks/new';
+  }
+  return candidate;
+}
+
+export default async function LoginPage({ searchParams }: PageProps) {
+  const resolvedSearchParams = await searchParams;
+  const rawCallback = readParam(resolvedSearchParams, 'callbackUrl');
+  const callbackUrl = normalizeCallbackPath(rawCallback);
+  const email = readParam(resolvedSearchParams, 'email');
+  const verified = readParam(resolvedSearchParams, 'verified') === '1';
+  const reset = readParam(resolvedSearchParams, 'reset') === '1';
+  const registered = readParam(resolvedSearchParams, 'registered') === '1';
 
   return (
     <LoginPageClient

@@ -9,20 +9,21 @@ import {
   Command,
   LogOut,
   Menu,
-  PanelLeftClose,
-  PanelRightClose,
+  Moon,
   Search,
+  Sun,
   Upload,
   UserCircle2,
   WandSparkles,
+  X,
 } from 'lucide-react';
-import { signOut, useSession } from 'next-auth/react';
+import { useTheme } from 'next-themes';
+import { useSession } from 'next-auth/react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { getNavItemContent, NAV_ITEMS } from '@/components/layout/nav-items';
 import { cn } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
-import { useShellPreferences } from '@/components/layout/shell-provider';
 import { AppLogo } from '@/components/common/app-logo';
 import { useLanguage } from '@/components/i18n/language-provider';
 import { LanguageToggle } from '@/components/i18n/language-toggle';
@@ -38,14 +39,15 @@ import { toast } from 'sonner';
 function HeaderContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { sidebarCollapsed, toggleSidebarCollapsed } = useShellPreferences();
   const { locale, t } = useLanguage();
+  const { resolvedTheme, setTheme } = useTheme();
   const { data: session, update } = useSession();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileHydrated, setProfileHydrated] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [themeMounted, setThemeMounted] = useState(false);
   const [profileImageState, setProfileImageState] = useState('');
   const [profileForm, setProfileForm] = useState({
     name: '',
@@ -61,6 +63,10 @@ function HeaderContent() {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    setThemeMounted(true);
+  }, []);
 
   const isNavItemActive = (href: string) => {
     const [baseHref, query] = href.split('?');
@@ -97,12 +103,19 @@ function HeaderContent() {
       .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1));
     return [t('breadcrumb.workspace', 'Workspace'), ...segments];
   }, [pathname, t]);
-  const userLabel = session?.user?.name || session?.user?.email || 'Account';
   const userImage = session?.user?.image || '';
-  const displayedUserImage = profileImageState || userImage;
+  const isDarkTheme = themeMounted && resolvedTheme === 'dark';
 
   const storageKeyNeedsReset = (key: string) => {
     const normalizedKey = key.toLowerCase();
+    if (normalizedKey === 'socialflow_splash_seen_v2') return false;
+    if (normalizedKey === 'socialflow_auth_remember_email') return false;
+    if (normalizedKey === 'socialflow_auth_remember_enabled') return false;
+    if (normalizedKey === 'socialflow_locale_v1') return false;
+    if (normalizedKey === 'socialflow_theme_preset_v1') return false;
+    if (normalizedKey === 'socialflow_shell_sidebar_collapsed_v1') return false;
+    if (normalizedKey === 'socialflow_shell_reduced_motion_v1') return false;
+    if (normalizedKey === 'socialflow_shell_density_v1') return false;
     return (
       normalizedKey.startsWith('socialflow_') ||
       normalizedKey.includes('nextauth') ||
@@ -170,14 +183,24 @@ function HeaderContent() {
   const handleLogout = () => {
     void (async () => {
       await clearClientSessionArtifacts();
-      try {
-        await signOut({ redirect: false });
-      } catch {
-        // continue with cookie cleanup redirect
-      }
-      window.location.assign('/api/clear-cookies?redirect=/login');
+      const redirectTarget = encodeURIComponent('/login?forceLogin=1&loggedOut=1');
+      window.location.replace(`/api/clear-cookies?redirect=${redirectTarget}`);
     })();
   };
+
+  useEffect(() => {
+    const onOpenProfile = () => setProfileOpen(true);
+    const onRequestLogout = () => handleLogout();
+
+    window.addEventListener('open-profile-settings', onOpenProfile);
+    window.addEventListener('request-logout', onRequestLogout);
+
+    return () => {
+      window.removeEventListener('open-profile-settings', onOpenProfile);
+      window.removeEventListener('request-logout', onRequestLogout);
+    };
+  }, []);
+
   const parseJsonSafe = async (res: Response) => {
     const text = await res.text();
     if (!text) return null;
@@ -380,18 +403,18 @@ function HeaderContent() {
   };
 
   return (
-    <header className="glass-toolbar fixed left-0 right-0 top-0 z-40 overflow-hidden lg:[inset-inline-start:var(--shell-sidebar-width)]">
+    <header className="glass-toolbar fixed left-0 right-0 top-0 z-40 overflow-visible md:[inset-inline-start:var(--shell-content-offset)]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_20%,color-mix(in_oklch,var(--primary)_18%,transparent),transparent_40%),radial-gradient(circle_at_82%_24%,color-mix(in_oklch,var(--accent)_16%,transparent),transparent_42%)]" />
-      <div className="relative flex h-[78px] items-center gap-2 px-3 sm:px-5 lg:px-8">
+      <div className="relative flex h-[var(--shell-header-height)] items-center gap-2 px-3 sm:px-5 lg:px-8">
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="icon"
-            className="h-10 w-10 rounded-xl border-border/65 bg-card/70 lg:hidden"
+            className="h-10 w-10 rounded-xl border-border/65 bg-card/70 md:hidden"
             onClick={() => setMobileMenuOpen((value) => !value)}
-            aria-label="Toggle navigation"
+            aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
           >
-            <Menu size={18} />
+            {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
           </Button>
 
           <Link
@@ -400,7 +423,7 @@ function HeaderContent() {
             aria-label={t('header.goToDashboard', 'Go to dashboard')}
           >
             <AppLogo size={28} showText={false} variant="splash" />
-            <div className="hidden leading-none sm:block">
+            <div className="hidden leading-none lg:block">
               <p className="text-sm font-semibold tracking-tight text-foreground">SocialFlow</p>
               <p className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                 {t('header.controlSuite', 'Control Suite')}
@@ -410,7 +433,7 @@ function HeaderContent() {
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="mb-0.5 hidden items-center gap-1 text-[11px] text-muted-foreground md:flex">
+          <div className="mb-0.5 hidden items-center gap-1 text-[11px] text-muted-foreground lg:flex">
             {crumbs.map((crumb, index) => (
               <span key={`${crumb}-${index}`} className="inline-flex items-center gap-1">
                 {index > 0 && <ChevronRight size={12} />}
@@ -450,30 +473,23 @@ function HeaderContent() {
           </span>
         </div>
 
-        <div className="flex items-center gap-1.5 rounded-2xl border border-border/65 bg-card/72 px-1.5 py-1 shadow-[0_10px_25px_-20px_color-mix(in_oklch,var(--foreground)_55%,transparent)]">
-          <LanguageToggle compact={false} className="hidden md:inline-flex" />
+        <div className="flex items-center gap-1.5">
+          <LanguageToggle minimal compact className="inline-flex lg:hidden" />
+          <LanguageToggle minimal compact={false} className="hidden lg:inline-flex" />
           <Button
             variant="ghost"
             size="icon"
-            className="hidden h-9 w-9 rounded-xl text-muted-foreground hover:bg-background/70 hover:text-foreground lg:inline-flex"
-            title={
-              sidebarCollapsed
-                ? t('sidebar.expandSidebar', 'Expand sidebar')
-                : t('sidebar.collapseSidebar', 'Collapse sidebar')
-            }
-            aria-label={
-              sidebarCollapsed
-                ? t('sidebar.expandSidebar', 'Expand sidebar')
-                : t('sidebar.collapseSidebar', 'Collapse sidebar')
-            }
-            onClick={toggleSidebarCollapsed}
+            className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-transparent hover:text-foreground"
+            title={isDarkTheme ? t('auth.themeLight', 'Light mode') : t('auth.themeDark', 'Dark mode')}
+            aria-label={isDarkTheme ? t('auth.themeLight', 'Light mode') : t('auth.themeDark', 'Dark mode')}
+            onClick={() => setTheme(isDarkTheme ? 'light' : 'dark')}
           >
-            {sidebarCollapsed ? <PanelRightClose size={17} /> : <PanelLeftClose size={17} />}
+            {isDarkTheme ? <Sun size={16} /> : <Moon size={16} />}
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            className="hidden h-9 w-9 rounded-xl text-muted-foreground hover:bg-background/70 hover:text-foreground xl:inline-flex"
+            className="hidden h-9 w-9 rounded-xl text-muted-foreground hover:bg-transparent hover:text-foreground xl:inline-flex"
             title={t('header.quickSearch', 'Quick Search')}
             aria-label={t('header.quickSearch', 'Quick Search')}
             onClick={() => {
@@ -483,91 +499,118 @@ function HeaderContent() {
             <WandSparkles size={16} />
           </Button>
           <Button
-            variant="outline"
-            className="hidden h-9 rounded-xl border-border/70 bg-background/65 px-3 text-xs text-foreground md:inline-flex"
-            onClick={handleLogout}
-          >
-            <LogOut size={14} />
-            {t('header.logout', 'Logout')}
-          </Button>
-          <Button
             variant="ghost"
             size="icon"
-            className="relative h-9 w-9 rounded-xl text-muted-foreground hover:bg-background/70 hover:text-foreground"
+            className="relative h-9 w-9 rounded-xl text-muted-foreground hover:bg-transparent hover:text-foreground max-[380px]:hidden"
             title={t('header.notifications', 'Notifications')}
             aria-label={t('header.notifications', 'Notifications')}
           >
             <Bell size={17} />
             <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-secondary animate-pulse-glow" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-xl ring-1 ring-border/65 hover:bg-background/70"
-            title={userLabel}
-            aria-label={userLabel}
-            onClick={() => setProfileOpen(true)}
-          >
-            {displayedUserImage ? (
-              <img
-                src={displayedUserImage}
-                alt={userLabel}
-                className="h-8 w-8 rounded-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <UserCircle2 size={19} />
-            )}
-          </Button>
         </div>
       </div>
 
       {mobileMenuOpen && (
-        <div className="animate-fade-up border-t border-border/65 bg-card/96 px-3 pb-4 pt-3 shadow-2xl backdrop-blur-xl lg:hidden">
-          <div className="mb-3 grid grid-cols-3 gap-2">
-            <Button
-              variant="outline"
-              className="h-10 rounded-xl border-border/70 bg-background/70 text-xs"
-              onClick={() => {
-                setMobileMenuOpen(false);
-                window.dispatchEvent(new CustomEvent('open-global-command-palette'));
-              }}
-            >
-              <Command size={14} />
-              {t('header.quickSearch', 'Quick Search')}
-            </Button>
-            <Button
-              variant="outline"
-              className="h-10 rounded-xl border-border/70 bg-background/70 text-xs"
-              onClick={() => setProfileOpen(true)}
-            >
-              <UserCircle2 size={14} />
-              {t('header.profile', 'Profile')}
-            </Button>
-            <LanguageToggle compact={false} className="h-10 w-full rounded-xl border-border/70 bg-background/70 text-xs" />
-          </div>
-          <div className="space-y-2">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const isActive = isNavItemActive(item.href);
-              const itemContent = getNavItemContent(item, locale);
+        <div className="fixed left-0 right-0 top-[var(--shell-header-height)] z-[70] md:hidden">
+          <div className="max-h-[calc(100vh-var(--shell-header-height))] overflow-y-auto border-t border-border/65 bg-card/95 px-3 pb-4 pt-3 shadow-2xl backdrop-blur-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="kpi-pill gap-2">
+                <Menu size={14} />
+                {t('sidebar.controlCenter', 'Control Center')}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 rounded-xl"
+                onClick={() => setMobileMenuOpen(false)}
+                aria-label="Close navigation menu"
+              >
+                <X size={16} />
+              </Button>
+            </div>
 
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    'flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-all',
-                    isActive
-                      ? 'border-primary/35 bg-primary/14 text-primary shadow-sm'
-                      : 'border-border/50 bg-background/65 text-foreground hover:border-primary/25 hover:bg-muted/65'
-                  )}
-                >
-                  <Icon size={15} />
-                  <span className="font-medium">{itemContent.label}</span>
-                </Link>
-              );
-            })}
+            <div className="mb-3 grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-border/70 bg-background/70 text-xs"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  window.dispatchEvent(new CustomEvent('open-global-command-palette'));
+                }}
+              >
+                <Command size={14} />
+                {t('header.quickSearch', 'Quick Search')}
+              </Button>
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-border/70 bg-background/70 text-xs"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setProfileOpen(true);
+                }}
+              >
+                <UserCircle2 size={14} />
+                {t('header.profile', 'Profile')}
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-10 rounded-xl border-border/70 bg-background/70 text-destructive hover:text-destructive min-[380px]:justify-self-start"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleLogout();
+                }}
+                aria-label={t('header.logout', 'Logout')}
+              >
+                <LogOut size={15} />
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {NAV_ITEMS.map((item) => {
+                const Icon = item.icon;
+                const isActive = isNavItemActive(item.href);
+                const itemContent = getNavItemContent(item, locale);
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      'group relative flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm transition-all',
+                      isActive
+                        ? 'border-sidebar-primary/38 bg-sidebar-primary/92 text-sidebar-primary-foreground shadow-lg shadow-primary/22'
+                        : 'border-transparent text-sidebar-foreground hover:border-sidebar-border hover:bg-sidebar-accent/75'
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        'mt-0.5 rounded-lg p-2 transition-colors',
+                        isActive
+                          ? 'bg-sidebar-primary-foreground/12'
+                          : 'bg-sidebar-accent/30 group-hover:bg-sidebar-accent'
+                      )}
+                    >
+                      <Icon size={16} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{itemContent.label}</p>
+                      <p
+                        className={cn(
+                          'truncate text-xs',
+                          isActive
+                            ? 'text-sidebar-primary-foreground/85'
+                            : 'text-sidebar-foreground/65'
+                        )}
+                      >
+                        {itemContent.caption}
+                      </p>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -684,7 +727,7 @@ function HeaderContent() {
 
 export function Header() {
   return (
-    <Suspense fallback={<header className="glass-toolbar fixed left-0 right-0 top-0 z-40 h-[78px] lg:[inset-inline-start:var(--shell-sidebar-width)]" />}>
+    <Suspense fallback={<header className="glass-toolbar fixed left-0 right-0 top-0 z-40 h-[var(--shell-header-height)] md:[inset-inline-start:var(--shell-content-offset)]" />}>
       <HeaderContent />
     </Suspense>
   );

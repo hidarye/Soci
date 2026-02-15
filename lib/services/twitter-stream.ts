@@ -12,6 +12,45 @@ import { getAnyTwitterBearerToken } from '@/lib/platform-credentials';
 
 const STREAM_URL = 'https://api.twitter.com/2/tweets/search/stream';
 
+function normalizeTwitterUsername(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  const lower = raw.toLowerCase();
+  return lower.startsWith('@') ? lower.slice(1) : lower;
+}
+
+function resolveSourceAccountIdForStream(params: {
+  task: any;
+  userAccounts: any[];
+  authorUsername?: string;
+}): string {
+  const sourceIds: string[] = Array.isArray(params.task?.sourceAccounts) ? params.task.sourceAccounts : [];
+  if (sourceIds.length === 0) return '';
+
+  const byId = new Map(params.userAccounts.map((a) => [a.id, a]));
+  const fallbackTwitter =
+    sourceIds.find((id) => byId.get(id)?.platformId === 'twitter') || sourceIds[0] || '';
+
+  const filters = params.task?.filters || {};
+  if (filters.twitterSourceType === 'username') {
+    // With username-based sources, we can't reliably map to a connected account.
+    return fallbackTwitter;
+  }
+
+  const authorNorm = normalizeTwitterUsername(params.authorUsername);
+  if (!authorNorm) return fallbackTwitter;
+
+  for (const id of sourceIds) {
+    const account = byId.get(id);
+    if (!account || account.platformId !== 'twitter') continue;
+    const candidate = normalizeTwitterUsername(
+      account.accountUsername || account.credentials?.accountInfo?.username || ''
+    );
+    if (candidate && candidate === authorNorm) return account.id;
+  }
+
+  return fallbackTwitter;
+}
+
 function buildRules(tasks: any[]) {
   const rules: Array<{ value: string; tag: string }> = [];
   for (const task of tasks) {
@@ -277,6 +316,11 @@ export class TwitterStream {
 
     const userAccounts = await db.getUserAccounts(task.userId);
     const targets = userAccounts.filter(a => task.targetAccounts.includes(a.id) && a.isActive);
+    const resolvedSourceAccountId = resolveSourceAccountIdForStream({
+      task,
+      userAccounts,
+      authorUsername: author.username,
+    });
 
     const message = buildMessage(task.transformations?.template, tweetItem, {
       username: author.username,
@@ -294,11 +338,12 @@ export class TwitterStream {
       try {
         if (target.platformId === 'telegram') {
           debugLog('Twitter -> Telegram start', { taskId: task.id, targetId: target.id });
-          const chatId = target.credentials?.chatId;
+          const overrideChatId = String((task.transformations as any)?.telegramTargetChatId || '').trim();
+          const chatId = String((target.credentials as any)?.chatId || '').trim() || overrideChatId;
           if (!chatId) throw new Error('Missing Telegram target chat ID');
           await sendToTelegram(
             target.accessToken,
-            String(chatId),
+            chatId,
             message,
             tweetItem.media,
             includeMedia,
@@ -403,7 +448,7 @@ export class TwitterStream {
 
       await db.createExecution({
         taskId: task.id,
-        sourceAccount: task.sourceAccounts[0] || '',
+        sourceAccount: resolvedSourceAccountId || task.sourceAccounts[0] || '',
         targetAccount: target.id,
         originalContent: tweetItem.text,
         transformedContent: message,

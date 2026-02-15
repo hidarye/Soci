@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,7 +33,35 @@ import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/common/use-confirm-dialog';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { getCachedQuery, setCachedQuery } from '@/lib/client/query-cache';
-import { cn } from '@/lib/utils';
+import { getCountries, getCountryCallingCode, type CountryCode } from 'libphonenumber-js/min';
+
+type CountryDialOption = {
+  iso2: CountryCode;
+  dialCode: string;
+  name: string;
+  flag: string;
+};
+
+function countryFlagEmoji(countryCode: string): string {
+  return countryCode
+    .toUpperCase()
+    .replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
+}
+
+function buildCountryDialOptions(): CountryDialOption[] {
+  const displayNames =
+    typeof Intl !== 'undefined' && 'DisplayNames' in Intl
+      ? new (Intl as any).DisplayNames(['en'], { type: 'region' })
+      : null;
+  return getCountries()
+    .map((iso2) => ({
+      iso2,
+      dialCode: getCountryCallingCode(iso2),
+      name: displayNames?.of(iso2) || iso2,
+      flag: countryFlagEmoji(iso2),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export default function AccountsPage() {
   const { confirm, ConfirmDialog } = useConfirmDialog();
@@ -45,7 +73,6 @@ export default function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [sortBy, setSortBy] = useState<'createdAt' | 'platformId' | 'isActive' | 'accountName'>('createdAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [viewMode, setViewMode] = useState<'cards' | 'compact'>('cards');
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
@@ -59,8 +86,8 @@ export default function AccountsPage() {
     apiKey: '',
     apiSecret: '',
     pageId: '',
-    chatId: '', // For Telegram
     channelId: '', // For YouTube
+    phoneCountry: 'US' as CountryCode,
     phoneNumber: '',
     phoneCode: '',
     twoFactorPassword: '',
@@ -69,6 +96,22 @@ export default function AccountsPage() {
   const [telegramNeedsPassword, setTelegramNeedsPassword] = useState(false);
   const [telegramPasswordHint, setTelegramPasswordHint] = useState('');
   const [isTelegramAuthLoading, setIsTelegramAuthLoading] = useState(false);
+  const telegramDirectFlow = selectedPlatform === 'telegram';
+  const countryDialOptions = useMemo(buildCountryDialOptions, []);
+  const selectedDialOption = useMemo(
+    () =>
+      countryDialOptions.find((option) => option.iso2 === formData.phoneCountry) ||
+      countryDialOptions[0] ||
+      null,
+    [countryDialOptions, formData.phoneCountry]
+  );
+
+  const getTelegramPhoneNumber = () => {
+    const digits = formData.phoneNumber.replace(/\D/g, '');
+    if (!digits) return '';
+    if (!selectedDialOption) return `+${digits}`;
+    return `+${selectedDialOption.dialCode}${digits}`;
+  };
 
   const resetTelegramAuthState = () => {
     setTelegramAuthId('');
@@ -133,20 +176,25 @@ export default function AccountsPage() {
   }, [pageSize, debouncedSearchTerm, statusFilter, sortBy, sortDir]);
 
   useEffect(() => {
-    if (selectedPlatform !== 'telegram' || authMethod !== 'manual') {
+    if (selectedPlatform === 'telegram') {
+      setAuthMethod('manual');
+      return;
+    }
+    if (authMethod !== 'manual') {
       resetTelegramAuthState();
     }
   }, [selectedPlatform, authMethod]);
 
   const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault();
+    const effectiveAuthMethod: 'oauth' | 'manual' = telegramDirectFlow ? 'manual' : authMethod;
 
     if (!selectedPlatform) {
       toast.error('Please select a platform');
       return;
     }
 
-    if (authMethod === 'oauth') {
+    if (effectiveAuthMethod === 'oauth') {
       if (selectedPlatform === 'telegram' || selectedPlatform === 'linkedin') {
         toast.error('OAuth is not available for this platform. Please use manual setup.');
         return;
@@ -156,18 +204,18 @@ export default function AccountsPage() {
       return;
     }
 
-    if (authMethod === 'manual' && selectedPlatform !== 'telegram' && !formData.accountName) {
+    if (effectiveAuthMethod === 'manual' && selectedPlatform !== 'telegram' && !formData.accountName) {
       toast.error('Please fill in all required fields');
       return;
     }
 
-    if (authMethod === 'manual' && selectedPlatform === 'telegram') {
-      if (!formData.phoneNumber) {
-        toast.error('Please enter phone number with country code');
+    if (effectiveAuthMethod === 'manual' && selectedPlatform === 'telegram') {
+      const phoneNumber = getTelegramPhoneNumber();
+      if (!phoneNumber) {
+        toast.error('Please enter your phone number');
         return;
       }
-      const hasCode = Boolean(formData.phoneCode.trim());
-      if (!telegramAuthId || !hasCode) {
+      if (!telegramAuthId) {
         try {
           setIsTelegramAuthLoading(true);
           const res = await fetch('/api/telegram/auth', {
@@ -175,7 +223,7 @@ export default function AccountsPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               action: 'start',
-              phoneNumber: formData.phoneNumber.trim(),
+              phoneNumber,
             }),
           });
           const data = await res.json();
@@ -183,6 +231,7 @@ export default function AccountsPage() {
           setTelegramAuthId(String(data.authId || ''));
           setTelegramNeedsPassword(false);
           setTelegramPasswordHint('');
+          setFormData((prev) => ({ ...prev, phoneCode: '', twoFactorPassword: '' }));
           toast.success('Verification code sent. Enter the code to continue.');
         } catch (error) {
           toast.error(error instanceof Error ? error.message : 'Failed to send Telegram code');
@@ -191,21 +240,30 @@ export default function AccountsPage() {
         }
         return;
       }
+
+      if (telegramNeedsPassword) {
+        if (!formData.twoFactorPassword.trim()) {
+          toast.error('Please enter your Telegram 2FA password');
+          return;
+        }
+      } else if (!formData.phoneCode.trim()) {
+        toast.error('Please enter the verification code');
+        return;
+      }
     }
 
-    if (authMethod === 'manual' && !formData.accessToken && selectedPlatform !== 'telegram') {
+    if (effectiveAuthMethod === 'manual' && !formData.accessToken && selectedPlatform !== 'telegram') {
       toast.error('Please enter the access token');
       return;
     }
 
     try {
       const credentials: any = {};
-      if (authMethod === 'manual') {
+      if (effectiveAuthMethod === 'manual') {
         credentials.accessToken = formData.accessToken;
         credentials.apiKey = formData.apiKey;
         credentials.apiSecret = formData.apiSecret;
         credentials.pageId = formData.pageId;
-        credentials.chatId = formData.chatId;
         credentials.channelId = formData.channelId;
       }
 
@@ -214,12 +272,12 @@ export default function AccountsPage() {
         accountName: formData.accountName,
         accountUsername: formData.accountUsername,
         accountId: formData.accountUsername || `${selectedPlatform}_${Date.now()}`,
-        accessToken: authMethod === 'manual' ? formData.accessToken : `oauth_${Date.now()}`,
+        accessToken: effectiveAuthMethod === 'manual' ? formData.accessToken : `oauth_${Date.now()}`,
         credentials,
         isActive: true,
       };
 
-      if (authMethod === 'manual' && selectedPlatform === 'telegram') {
+      if (effectiveAuthMethod === 'manual' && selectedPlatform === 'telegram') {
         setIsTelegramAuthLoading(true);
         const verifyRes = await fetch('/api/telegram/auth', {
           method: 'POST',
@@ -227,7 +285,7 @@ export default function AccountsPage() {
           body: JSON.stringify({
             action: 'verify',
             authId: telegramAuthId,
-            phoneCode: formData.phoneCode.trim(),
+            phoneCode: formData.phoneCode.trim() || undefined,
             password: formData.twoFactorPassword || undefined,
           }),
         });
@@ -255,14 +313,13 @@ export default function AccountsPage() {
           ...payload.credentials,
           authType: 'user_session',
           sessionString: profile.sessionString,
-          phoneNumber: profile.phoneNumber || formData.phoneNumber.trim(),
-          chatId: formData.chatId || undefined,
+          phoneNumber: profile.phoneNumber || getTelegramPhoneNumber(),
           accountInfo: {
             id: profile.accountId,
             username: profile.accountUsername,
             name: profile.accountName,
             isBot: false,
-            phoneNumber: profile.phoneNumber || formData.phoneNumber.trim(),
+            phoneNumber: profile.phoneNumber || getTelegramPhoneNumber(),
           },
         };
       }
@@ -282,8 +339,8 @@ export default function AccountsPage() {
         apiKey: '',
         apiSecret: '',
         pageId: '',
-        chatId: '',
         channelId: '',
+        phoneCountry: 'US',
         phoneNumber: '',
         phoneCode: '',
         twoFactorPassword: '',
@@ -371,6 +428,37 @@ export default function AccountsPage() {
   const totalConnected = accounts.length;
   const activeConnected = accounts.filter((account) => account.isActive).length;
   const connectedPlatforms = new Set(accounts.map((account) => account.platformId)).size;
+  const effectiveAuthMethod: 'oauth' | 'manual' = telegramDirectFlow ? 'manual' : authMethod;
+
+  const handleResendTelegramCode = async () => {
+    const phoneNumber = getTelegramPhoneNumber();
+    if (!phoneNumber) {
+      toast.error('Enter your phone number first.');
+      return;
+    }
+    try {
+      setIsTelegramAuthLoading(true);
+      const res = await fetch('/api/telegram/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'start',
+          phoneNumber,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to resend Telegram code');
+      setTelegramAuthId(String(data.authId || ''));
+      setFormData((prev) => ({ ...prev, phoneCode: '', twoFactorPassword: '' }));
+      setTelegramNeedsPassword(false);
+      setTelegramPasswordHint('');
+      toast.success('Verification code resent.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to resend Telegram code');
+    } finally {
+      setIsTelegramAuthLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background control-app">
@@ -420,37 +508,39 @@ export default function AccountsPage() {
               </DialogHeader>
 
               <form onSubmit={handleAddAccount} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    Authentication Method
-                  </label>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => setAuthMethod('oauth')}
-                      className={`p-3 rounded-lg border-2 transition-all text-left ${
-                        authMethod === 'oauth'
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border hover:border-border/80'
-                      }`}
-                    >
-                      <div className="font-semibold text-sm">OAuth</div>
-                      <div className="text-xs text-muted-foreground">Secure, one-click login</div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAuthMethod('manual')}
-                      className={`p-3 rounded-lg border-2 transition-all text-left ${
-                        authMethod === 'manual'
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border hover:border-border/80'
-                      }`}
-                    >
-                      <div className="font-semibold text-sm">Manual</div>
-                      <div className="text-xs text-muted-foreground">API keys/tokens</div>
-                    </button>
+                {!telegramDirectFlow && (
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-2">
+                      Authentication Method
+                    </label>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setAuthMethod('oauth')}
+                        className={`p-3 rounded-lg border-2 transition-all text-left ${
+                          authMethod === 'oauth'
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-border/80'
+                        }`}
+                      >
+                        <div className="font-semibold text-sm">OAuth</div>
+                        <div className="text-xs text-muted-foreground">Secure, one-click login</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuthMethod('manual')}
+                        className={`p-3 rounded-lg border-2 transition-all text-left ${
+                          authMethod === 'manual'
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-border/80'
+                        }`}
+                      >
+                        <div className="font-semibold text-sm">Manual</div>
+                        <div className="text-xs text-muted-foreground">API keys/tokens</div>
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-2">
@@ -458,7 +548,12 @@ export default function AccountsPage() {
                   </label>
                   <Select
                     value={selectedPlatform}
-                    onValueChange={(value: any) => setSelectedPlatform(value)}
+                    onValueChange={(value: any) => {
+                      setSelectedPlatform(value);
+                      if (value === 'telegram') {
+                        setAuthMethod('manual');
+                      }
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select a platform" />
@@ -476,7 +571,7 @@ export default function AccountsPage() {
                   </Select>
                 </div>
 
-                {authMethod === 'manual' && selectedPlatform !== 'telegram' && (
+                {effectiveAuthMethod === 'manual' && selectedPlatform !== 'telegram' && (
                   <>
                     <div>
                       <label className="block text-sm font-medium text-foreground mb-2">
@@ -512,7 +607,7 @@ export default function AccountsPage() {
                   </>
                 )}
 
-                {authMethod === 'manual' && (
+                {effectiveAuthMethod === 'manual' && (
                   <div className="space-y-4">
                     {selectedPlatform === 'facebook' && (
                       <div>
@@ -529,27 +624,72 @@ export default function AccountsPage() {
 
                     {selectedPlatform === 'telegram' && (
                       <>
+                        <div className="rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
+                          Telegram uses a direct sign-in flow in one place:
+                          phone number, verification code, and 2FA password if enabled.
+                        </div>
                         <div>
                           <label className="block text-sm font-medium text-foreground mb-2">
                             Phone Number *
                           </label>
-                          <Input
-                            placeholder="+9677xxxxxxx"
-                            value={formData.phoneNumber}
-                            onChange={(e) => setFormData(prev => ({ ...prev, phoneNumber: e.target.value }))}
-                          />
-                        </div>
-                        {telegramAuthId && (
-                          <div>
-                            <label className="block text-sm font-medium text-foreground mb-2">
-                              Verification Code *
-                            </label>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,240px)_1fr]">
+                            <Select
+                              value={formData.phoneCountry}
+                              onValueChange={(value: CountryCode) =>
+                                setFormData((prev) => ({ ...prev, phoneCountry: value }))
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Country code" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {countryDialOptions.map((option) => (
+                                  <SelectItem key={option.iso2} value={option.iso2}>
+                                    <span className="inline-flex items-center gap-2">
+                                      <span>{option.flag}</span>
+                                      <span>{option.iso2}</span>
+                                      <span className="text-muted-foreground">+{option.dialCode}</span>
+                                    </span>
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             <Input
-                              placeholder="12345"
-                              value={formData.phoneCode}
-                              onChange={(e) => setFormData(prev => ({ ...prev, phoneCode: e.target.value }))}
+                              placeholder="Local phone number"
+                              value={formData.phoneNumber}
+                              onChange={(e) => setFormData(prev => ({ ...prev, phoneNumber: e.target.value }))}
                             />
                           </div>
+                          {selectedDialOption ? (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              Selected: {selectedDialOption.flag} {selectedDialOption.name} ({selectedDialOption.iso2}) +{selectedDialOption.dialCode}
+                            </p>
+                          ) : null}
+                        </div>
+                        {telegramAuthId && (
+                          <>
+                            <div>
+                              <label className="block text-sm font-medium text-foreground mb-2">
+                                Verification Code *
+                              </label>
+                              <Input
+                                placeholder="12345"
+                                value={formData.phoneCode}
+                                onChange={(e) => setFormData(prev => ({ ...prev, phoneCode: e.target.value }))}
+                              />
+                            </div>
+                            <div className="flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={handleResendTelegramCode}
+                                disabled={isTelegramAuthLoading}
+                              >
+                                Resend Code
+                              </Button>
+                            </div>
+                          </>
                         )}
                         {telegramNeedsPassword && (
                           <div>
@@ -564,16 +704,6 @@ export default function AccountsPage() {
                             />
                           </div>
                         )}
-                        <div>
-                          <label className="block text-sm font-medium text-foreground mb-2">
-                            Source Chat ID (Optional)
-                          </label>
-                          <Input
-                            placeholder="-1001234567890"
-                            value={formData.chatId}
-                            onChange={(e) => setFormData(prev => ({ ...prev, chatId: e.target.value }))}
-                          />
-                        </div>
                       </>
                     )}
 
@@ -643,14 +773,14 @@ export default function AccountsPage() {
 
                 <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                   <Button type="submit" className="flex-1" disabled={isTelegramAuthLoading}>
-                    {authMethod === 'oauth'
+                    {effectiveAuthMethod === 'oauth'
                       ? 'Connect with OAuth'
-                      : authMethod === 'manual' && selectedPlatform === 'telegram'
-                      ? !telegramAuthId || !formData.phoneCode.trim()
-                        ? 'Send Verification Code'
+                      : effectiveAuthMethod === 'manual' && selectedPlatform === 'telegram'
+                      ? !telegramAuthId
+                        ? 'Sign In'
                         : telegramNeedsPassword
-                        ? 'Verify Code + 2FA'
-                        : 'Verify Telegram & Add Account'
+                        ? 'Confirm Password'
+                        : 'Confirm Code'
                       : 'Add Account'}
                   </Button>
                   <Button
@@ -711,20 +841,6 @@ export default function AccountsPage() {
               </Select>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant={viewMode === 'cards' ? 'default' : 'outline'}
-                onClick={() => setViewMode('cards')}
-              >
-                Cards
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === 'compact' ? 'default' : 'outline'}
-                onClick={() => setViewMode('compact')}
-              >
-                Compact
-              </Button>
               {(searchTerm || statusFilter !== 'all') && (
                 <Button
                   size="sm"
@@ -780,13 +896,13 @@ export default function AccountsPage() {
                     <span>{config.name}</span>
                   </h2>
 
-                  <div className={cn('grid grid-cols-1', viewMode === 'compact' ? 'gap-2' : 'gap-4')}>
+                  <div className="grid grid-cols-1 gap-4">
                     {platformAccounts.map(account => (
                       <Card
                         key={account.id}
-                        className={`${account.isActive ? '' : 'opacity-65'} hover:border-primary/30 ${viewMode === 'compact' ? 'rounded-xl' : ''}`}
+                        className={`${account.isActive ? '' : 'opacity-65'} hover:border-primary/30`}
                       >
-                        <CardContent className={viewMode === 'compact' ? 'p-4' : 'p-6'}>
+                        <CardContent className="p-6">
                           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                             <div className="flex min-w-0 flex-1 items-center gap-4">
                               <AccountAvatar
@@ -841,7 +957,7 @@ export default function AccountsPage() {
                                 size="sm"
                                 onClick={() => handleToggleStatus(account)}
                               >
-                                {account.isActive ? 'Disconnect' : 'Reconnect'}
+                                {account.isActive ? 'Disconnect' : 'Connect'}
                               </Button>
 
                               <Button

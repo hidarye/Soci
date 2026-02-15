@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import { useLanguage } from '@/components/i18n/language-provider';
 import { translateRuntimeText } from '@/lib/i18n/runtime-translations';
 
@@ -84,11 +85,24 @@ function walkAndLocalize(
 
 export function RuntimeLocalizer() {
   const { locale } = useLanguage();
+  const pathname = usePathname();
+  const isAuthRoute = pathname === '/login' ||
+    pathname === '/register' ||
+    pathname === '/verify-email' ||
+    pathname === '/forgot-password' ||
+    pathname === '/reset-password' ||
+    pathname.startsWith('/login/') ||
+    pathname.startsWith('/register/') ||
+    pathname.startsWith('/verify-email/') ||
+    pathname.startsWith('/forgot-password/') ||
+    pathname.startsWith('/reset-password/');
+  const shouldLocalizeRuntime = locale === 'ar' && !isAuthRoute;
   const textOriginalsRef = useRef<WeakMap<Text, string>>(new WeakMap());
   const attrOriginalsRef = useRef<WeakMap<Element, Map<AttrName, string>>>(new WeakMap());
   const isApplyingRef = useRef(false);
 
   useEffect(() => {
+    if (!shouldLocalizeRuntime) return;
     if (typeof document === 'undefined') return;
 
     const applyLocalization = (root: ParentNode = document.body) => {
@@ -146,7 +160,7 @@ export function RuntimeLocalizer() {
     });
 
     return () => observer.disconnect();
-  }, [locale]);
+  }, [locale, shouldLocalizeRuntime]);
 
   return null;
 }

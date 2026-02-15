@@ -2,10 +2,10 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { AlertCircle, CheckCircle2, Eye, EyeOff, MailCheck } from 'lucide-react';
 import { AuthShell } from '@/components/auth/auth-shell';
-import { WaitingSplash } from '@/components/layout/waiting-splash';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -41,6 +41,7 @@ export default function RegisterPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [error, setError] = useState<string>('');
+  const [conflictEmail, setConflictEmail] = useState<string>('');
   const [successEmail, setSuccessEmail] = useState('');
   const [debugVerificationCode, setDebugVerificationCode] = useState('');
   const [debugVerificationUrl, setDebugVerificationUrl] = useState('');
@@ -63,12 +64,6 @@ export default function RegisterPage() {
       : passwordStrength <= 4
         ? 'Medium'
         : 'Strong';
-  const waitingTitle = loading ? 'Creating Account' : isResending ? 'Sending Verification Code' : 'Please Wait';
-  const waitingSubtitle = loading
-    ? 'Setting up your workspace and security settings...'
-    : isResending
-      ? 'Requesting a fresh verification code...'
-      : 'Processing your request...';
 
   const validate = (): FieldErrors => {
     const next: FieldErrors = {};
@@ -103,9 +98,10 @@ export default function RegisterPage() {
     setFieldErrors(validationErrors);
     setInfoMessage('');
     setError('');
+    setConflictEmail('');
     if (Object.keys(validationErrors).length > 0) return;
 
-    setLoading(true);
+    flushSync(() => setLoading(true));
 
     const normalizedEmail = email.trim().toLowerCase();
     const res = await fetch('/api/auth/register', {
@@ -118,6 +114,9 @@ export default function RegisterPage() {
     setLoading(false);
     if (!res.ok || !data.success) {
       setError(data.error || 'Registration failed. Please try again.');
+      if (res.status === 409) {
+        setConflictEmail(normalizedEmail);
+      }
       return;
     }
 
@@ -147,7 +146,7 @@ export default function RegisterPage() {
 
   const resendVerification = async () => {
     if (!successEmail || isResending) return;
-    setIsResending(true);
+    flushSync(() => setIsResending(true));
     setInfoMessage('');
     setError('');
     try {
@@ -180,7 +179,6 @@ export default function RegisterPage() {
         title="Check Your Email"
         description="Your account has been created. Verify your email to activate secure sign in."
       >
-        <WaitingSplash active={loading || isResending} title={waitingTitle} subtitle={waitingSubtitle} />
         <div className="space-y-5">
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm">
             <div className="mb-2 inline-flex items-center gap-2 font-semibold text-emerald-700 dark:text-emerald-300">
@@ -246,7 +244,6 @@ export default function RegisterPage() {
       logoSize={100}
       logoShowText={false}
     >
-      <WaitingSplash active={loading || isResending} title={waitingTitle} subtitle={waitingSubtitle} />
       <form onSubmit={onSubmit} className="space-y-5">
         <div className="space-y-2">
           <Label htmlFor="register-name">Full Name</Label>
@@ -267,7 +264,10 @@ export default function RegisterPage() {
             id="register-email"
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (conflictEmail) setConflictEmail('');
+            }}
             placeholder="you@example.com"
             autoComplete="email"
             aria-invalid={Boolean(fieldErrors.email)}
@@ -393,6 +393,26 @@ export default function RegisterPage() {
             </p>
           ) : null}
         </div>
+
+        {conflictEmail ? (
+          <div className="rounded-xl border border-border/70 bg-muted/35 p-3 text-sm">
+            <p className="mb-3 text-muted-foreground">
+              This email is already registered. Try signing in, or reset your password.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Link href={`/login?email=${encodeURIComponent(conflictEmail)}`} className="block">
+                <Button type="button" variant="outline" className="w-full">
+                  Go to Sign In
+                </Button>
+              </Link>
+              <Link href="/forgot-password" className="block">
+                <Button type="button" variant="outline" className="w-full">
+                  Forgot password?
+                </Button>
+              </Link>
+            </div>
+          </div>
+        ) : null}
 
         <Button type="submit" className="w-full" disabled={loading}>
           {loading ? 'Creating account...' : 'Create Account'}

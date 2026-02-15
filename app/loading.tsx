@@ -2,15 +2,23 @@ import { AppLogo } from '@/components/common/app-logo';
 
 export default function Loading() {
   return (
-    <div className="splash-overlay" role="status" aria-live="polite" aria-busy="true">
-      <div className="splash-overlay__glow" />
-      <div className="splash-overlay__panel">
-        <div className="splash-overlay__ring" />
-        <div className="splash-overlay__logo">
-          <AppLogo size={72} showText={false} variant="splash" splashSurface={false} className="!m-0" />
+    <div className="app-route-loading route-loader" role="status" aria-live="polite" aria-busy="true">
+      <div className="route-loader__panel">
+        <div className="route-loader__orbit route-loader__orbit--outer" />
+        <div className="route-loader__orbit route-loader__orbit--inner" />
+        <div className="route-loader__logo">
+          <AppLogo size={76} showText={false} variant="splash" splashSurface={false} className="!m-0" />
         </div>
-        <h2 className="splash-overlay__title">SocialFlow Orbit</h2>
-        <p className="splash-overlay__subtitle">Loading your workspace...</p>
+        <h2 className="route-loader__title">SocialFlow Orbit</h2>
+        <p className="route-loader__subtitle">Syncing your automation workspace...</p>
+        <div className="route-loader__progress" aria-hidden="true">
+          <span />
+        </div>
+        <div className="route-loader__dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
       </div>
     </div>
   );

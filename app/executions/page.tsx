@@ -13,12 +13,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { TaskExecution } from '@/lib/db';
+import type { PlatformAccount, TaskExecution } from '@/lib/db';
+import type { PlatformId } from '@/lib/platforms/types';
 import { extractExecutionMessageLinks } from '@/lib/execution-links';
-import { Search, Download, RefreshCw, ChevronDown, Loader2 } from 'lucide-react';
+import { Search, Download, RefreshCw, ChevronDown, Loader2, ArrowRight } from 'lucide-react';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { getCachedQuery, setCachedQuery } from '@/lib/client/query-cache';
 import { toast } from 'sonner';
+import { PlatformIcon } from '@/components/common/platform-icon';
 
 interface ExpandedExecution extends TaskExecution {
   taskName?: string;
@@ -48,6 +50,7 @@ export default function ExecutionsPage() {
   const [activeTaskProgress, setActiveTaskProgress] = useState<Record<string, number>>({});
   const [sortBy, setSortBy] = useState<'executedAt' | 'status' | 'taskName'>('executedAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [accountById, setAccountById] = useState<Record<string, PlatformAccount>>({});
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingExecutions, setIsLoadingExecutions] = useState(true);
@@ -117,6 +120,29 @@ export default function ExecutionsPage() {
       controller.abort();
     };
   }, [pageSize, debouncedSearchTerm, statusFilter, sortBy, sortDir]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAccounts() {
+      try {
+        const res = await fetch('/api/accounts?limit=300&offset=0');
+        const data = await res.json();
+        if (!res.ok || !data.success) return;
+        if (cancelled) return;
+        const map: Record<string, PlatformAccount> = {};
+        for (const account of (data.accounts || []) as PlatformAccount[]) {
+          map[account.id] = account;
+        }
+        setAccountById(map);
+      } catch {
+        // non-blocking
+      }
+    }
+    void loadAccounts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeProcessingCount) return;
@@ -502,6 +528,8 @@ export default function ExecutionsPage() {
                   ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                   : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
               const liveProgress = clampProgress(typeof pendingProgress === 'number' ? pendingProgress : 64);
+              const sourcePlatformId = accountById[execution.sourceAccount]?.platformId as PlatformId | undefined;
+              const targetPlatformId = accountById[execution.targetAccount]?.platformId as PlatformId | undefined;
 
               return (
                 <Card
@@ -542,6 +570,17 @@ export default function ExecutionsPage() {
                               </span>
                               <span>{liveProgress}%</span>
                             </div>
+                            <div className="mb-2 execution-flow-track">
+                              <span className="execution-platform-chip">
+                                {sourcePlatformId ? <PlatformIcon platformId={sourcePlatformId} size={14} /> : 'SRC'}
+                              </span>
+                              <span className="execution-flow-arrow">
+                                <ArrowRight size={14} />
+                              </span>
+                              <span className="execution-platform-chip">
+                                {targetPlatformId ? <PlatformIcon platformId={targetPlatformId} size={14} /> : 'DST'}
+                              </span>
+                            </div>
                             <div className="execution-progress-track">
                               <div
                                 className="execution-progress-fill"
@@ -568,11 +607,17 @@ export default function ExecutionsPage() {
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                           <div>
                             <p className="mb-1 text-xs text-muted-foreground">Source</p>
-                            <p className="text-sm font-medium text-foreground">{sourceAccountLabel}</p>
+                            <p className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+                              {sourcePlatformId ? <PlatformIcon platformId={sourcePlatformId} size={14} /> : null}
+                              <span>{sourceAccountLabel}</span>
+                            </p>
                           </div>
                           <div>
                             <p className="mb-1 text-xs text-muted-foreground">Target</p>
-                            <p className="text-sm font-medium text-foreground">{targetAccountLabel}</p>
+                            <p className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+                              {targetPlatformId ? <PlatformIcon platformId={targetPlatformId} size={14} /> : null}
+                              <span>{targetAccountLabel}</span>
+                            </p>
                           </div>
                         </div>
 

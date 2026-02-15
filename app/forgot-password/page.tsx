@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { flushSync } from 'react-dom';
 import { AuthShell } from '@/components/auth/auth-shell';
-import { WaitingSplash } from '@/components/layout/waiting-splash';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -37,7 +37,7 @@ export default function ForgotPasswordPage() {
       return;
     }
 
-    setSubmitting(true);
+    flushSync(() => setSubmitting(true));
     try {
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
@@ -64,11 +64,6 @@ export default function ForgotPasswordPage() {
 
   return (
     <AuthShell title="Forgot Password" description="Request a secure password reset code for your account.">
-      <WaitingSplash
-        active={submitting}
-        title="Sending Reset Code"
-        subtitle="Preparing a secure password reset code for your account..."
-      />
       <form onSubmit={onSubmit} className="space-y-5">
         <div className="space-y-2">
           <Label htmlFor="forgot-password-email">Email</Label>

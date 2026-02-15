@@ -207,11 +207,12 @@ export class TwitterPoller {
           try {
             if (target.platformId === 'telegram') {
               debugLog('Twitter poller -> Telegram start', { taskId: task.id, targetId: target.id });
-              const chatId = target.credentials?.chatId;
+              const overrideChatId = String((task.transformations as any)?.telegramTargetChatId || '').trim();
+              const chatId = String((target.credentials as any)?.chatId || '').trim() || overrideChatId;
               if (!chatId) throw new Error('Missing Telegram target chat ID');
               await sendToTelegram(
                 target.accessToken,
-                String(chatId),
+                chatId,
                 message,
                 tweet.media,
                 includeMedia,

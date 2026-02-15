@@ -35,11 +35,29 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "rm -f .next/lock && pnpm build && bash scripts/start-with-telegram-local-api.sh pnpm start"
+args = "rm -f .next/lock && NEXT_USE_TURBOPACK=0 pnpm build && pnpm start"
 waitForPort = 5000
 
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow]]
+name = "Dev"
+mode = "sequential"
+author = 49497668
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev "
+
+[[workflows.workflow]]
+name = "Development "
+mode = "sequential"
+author = 49497668
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Dev"
 
 [[ports]]
 localPort = 5000
@@ -48,6 +66,10 @@ externalPort = 80
 [[ports]]
 localPort = 5001
 externalPort = 3000
+
+[[ports]]
+localPort = 5100
+externalPort = 3001
 
 [deployment]
 deploymentTarget = "autoscale"

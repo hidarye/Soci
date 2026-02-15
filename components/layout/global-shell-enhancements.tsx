@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Activity,
@@ -35,13 +35,14 @@ type CommandAction = {
 
 const RECENT_PATHS_KEY = 'socialflow_recent_paths_v1';
 const MAX_RECENT_PATHS = 6;
+const AUTH_ROUTES = ['/login', '/register', '/verify-email', '/forgot-password', '/reset-password'];
 
 const QUICK_ACTIONS: CommandAction[] = [
   {
     id: 'create-task',
     title: 'Create Task',
     description: 'Launch automation task wizard',
-    href: '/tasks?create=1',
+    href: '/tasks/new',
     keywords: ['new', 'automation', 'task'],
   },
   {
@@ -87,6 +88,7 @@ function displayPathLabel(path: string) {
 export function GlobalShellEnhancements() {
   const router = useRouter();
   const pathname = usePathname();
+  const hasMountedPathRef = useRef(false);
   const [isOnline, setIsOnline] = useState(true);
   const [routeChanging, setRouteChanging] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -154,6 +156,10 @@ export function GlobalShellEnhancements() {
   }, []);
 
   useEffect(() => {
+    if (!hasMountedPathRef.current) {
+      hasMountedPathRef.current = true;
+      return;
+    }
     setRouteChanging(true);
     const timer = window.setTimeout(() => setRouteChanging(false), 360);
     return () => window.clearTimeout(timer);
@@ -233,7 +239,8 @@ export function GlobalShellEnhancements() {
     router.push(href);
   };
 
-  if (pathname === '/login' || pathname === '/register') {
+  const isAuthRoute = AUTH_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  if (isAuthRoute) {
     return null;
   }
 
@@ -249,14 +256,14 @@ export function GlobalShellEnhancements() {
         </div>
       )}
 
-      <div className="fixed z-40 flex flex-col items-end gap-2 bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] sm:bottom-5 sm:right-5">
+      <div className="fixed z-40 flex flex-col items-end gap-2 bottom-[max(0.75rem,env(safe-area-inset-bottom))] [inset-inline-end:max(0.75rem,env(safe-area-inset-right))] sm:bottom-5 sm:[inset-inline-end:1.25rem]">
         {fabOpen && (
           <div className="animate-fade-up space-y-2 rounded-2xl border border-border/70 bg-card/92 p-2 shadow-2xl backdrop-blur-xl">
             <Button variant="ghost" className="w-full justify-start" onClick={() => setCommandOpen(true)}>
               <Command size={15} />
               Command Palette
             </Button>
-            <Button variant="ghost" className="w-full justify-start" onClick={() => openHref('/tasks?create=1')}>
+            <Button variant="ghost" className="w-full justify-start" onClick={() => openHref('/tasks/new')}>
               <Plus size={15} />
               New Task
             </Button>
@@ -415,7 +422,7 @@ export function GlobalShellEnhancements() {
                 <Keyboard size={14} />
                 Faster Operator Workflow
               </p>
-              <p className="text-muted-foreground">New keyboard shortcuts and compact density mode for high-throughput usage.</p>
+              <p className="text-muted-foreground">New keyboard shortcuts and performance-focused shell polish.</p>
             </div>
           </div>
         </DialogContent>

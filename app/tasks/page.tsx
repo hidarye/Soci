@@ -1,219 +1,153 @@
 'use client';
 
 import { Suspense, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import {
+  Plus,
+  Search,
+  Edit2,
+  Trash2,
+  Play,
+  Pause,
+  ArrowRight,
+  Loader2,
+  Clock3,
+  Sparkles,
+} from 'lucide-react';
+
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import type { PlatformAccount, Task } from '@/lib/db';
-import { Plus, Search, Edit2, Trash2, Play, Pause } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { toast } from 'sonner';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useConfirmDialog } from '@/components/common/use-confirm-dialog';
-import { platformConfigs } from '@/lib/platforms/handlers';
-import type { PlatformId } from '@/lib/platforms/types';
 import { PlatformIcon } from '@/components/common/platform-icon';
+
+import type { PlatformAccount, Task } from '@/lib/db';
+import type { PlatformId } from '@/lib/platforms/types';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { getCachedQuery, setCachedQuery } from '@/lib/client/query-cache';
 import { cn } from '@/lib/utils';
-import {
-  DEFAULT_YOUTUBE_CATEGORY_ID,
-  resolveYouTubeCategoryId,
-  YOUTUBE_VIDEO_CATEGORIES,
-} from '@/lib/youtube-categories';
 
-const createDefaultTaskForm = () => ({
-  name: '',
-  description: '',
-  sourcePlatform: '',
-  sourceAccountId: '',
-  targetPlatform: '',
-  targetAccountId: '',
-  executionType: 'immediate' as 'immediate' | 'scheduled' | 'recurring',
-  scheduleTime: '',
-  recurringPattern: 'daily' as 'daily' | 'weekly' | 'monthly' | 'custom',
-  template: '',
-  includeMedia: true,
-  enableYtDlp: false,
-  twitterSourceType: 'account' as 'account' | 'username',
-  twitterUsername: '',
-  excludeReplies: false,
-  excludeRetweets: false,
-  excludeQuotes: false,
-  originalOnly: false,
-  pollIntervalSeconds: 60,
-  triggerType: 'on_tweet' as
-    | 'on_tweet'
-    | 'on_mention'
-    | 'on_keyword'
-    | 'on_hashtag'
-    | 'on_search'
-    | 'on_retweet'
-    | 'on_like',
-  triggerValue: '',
-  twitterActions: {
-    post: true,
-    reply: false,
-    quote: false,
-    retweet: false,
-    like: false,
+const STATUS_META: Record<
+  Task['status'],
+  { label: string; tone: string; buttonLabel: string; runHint: string }
+> = {
+  active: {
+    label: 'Active',
+    tone: 'status-pill--success',
+    buttonLabel: 'Pause',
+    runHint: 'Live routing',
   },
-  youtubeActions: {
-    uploadVideo: true,
-    uploadVideoToPlaylist: false,
-    playlistId: '',
+  paused: {
+    label: 'Paused',
+    tone: 'status-pill--neutral',
+    buttonLabel: 'Resume',
+    runHint: 'Stopped manually',
   },
-  youtubeVideo: {
-    titleTemplate: '',
-    descriptionTemplate: '',
-    tagsText: '',
-    privacyStatus: 'public' as 'private' | 'unlisted' | 'public',
-    categoryId: DEFAULT_YOUTUBE_CATEGORY_ID,
-    embeddable: true,
-    license: 'youtube' as 'youtube' | 'creativeCommon',
-    publicStatsViewable: true,
-    selfDeclaredMadeForKids: false,
-    notifySubscribers: true,
-    publishAt: '',
-    defaultLanguage: '',
-    defaultAudioLanguage: '',
-    recordingDate: '',
+  completed: {
+    label: 'Completed',
+    tone: 'status-pill--neutral',
+    buttonLabel: 'Activate',
+    runHint: 'Finished schedule',
   },
-});
+  error: {
+    label: 'Error',
+    tone: 'status-pill--error',
+    buttonLabel: 'Retry Mode',
+    runHint: 'Needs attention',
+  },
+};
 
-type TaskDialogForm = ReturnType<typeof createDefaultTaskForm>;
+function uniquePlatformIdsForAccounts(
+  accountIds: string[],
+  accountById: Record<string, PlatformAccount>
+): PlatformId[] {
+  const seen = new Set<PlatformId>();
+  for (const accountId of accountIds) {
+    const platformId = accountById[accountId]?.platformId as PlatformId | undefined;
+    if (!platformId) continue;
+    seen.add(platformId);
+  }
+  return [...seen];
+}
+
+function getRelativeLastRun(value?: Date | string | null): string {
+  if (!value) return 'Never';
+  const date = typeof value === 'string' ? new Date(value) : value;
+  if (Number.isNaN(date.getTime())) return 'Never';
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 60_000) return 'Just now';
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+function resolveAccountAvatar(account: PlatformAccount): string | null {
+  const credentials = (account.credentials || {}) as Record<string, unknown>;
+  const accountInfo =
+    typeof credentials.accountInfo === 'object' && credentials.accountInfo
+      ? (credentials.accountInfo as Record<string, unknown>)
+      : null;
+
+  const candidates = [
+    credentials.profileImageUrl,
+    credentials.avatarUrl,
+    credentials.picture,
+    accountInfo?.profileImageUrl,
+    accountInfo?.avatarUrl,
+    accountInfo?.picture,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function accountDisplayName(account: PlatformAccount): string {
+  return (
+    String(account.accountName || '').trim() ||
+    String(account.accountUsername || '').trim() ||
+    String(account.accountId || '').trim() ||
+    account.id
+  );
+}
 
 function TasksPageContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { confirm, ConfirmDialog } = useConfirmDialog();
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'paused' | 'completed' | 'error'>('all');
   const [sortBy, setSortBy] = useState<'createdAt' | 'status' | 'name'>('createdAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [viewMode, setViewMode] = useState<'cards' | 'compact'>('cards');
+  const [accountById, setAccountById] = useState<Record<string, PlatformAccount>>({});
+
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [createForm, setCreateForm] = useState<TaskDialogForm>(createDefaultTaskForm());
+  const [runningTaskIds, setRunningTaskIds] = useState<Record<string, boolean>>({});
+
   const pageSize = 50;
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
-
-  const toLocalDateTimeInput = (value?: Date | string | null) => {
-    if (!value) return '';
-    const date = typeof value === 'string' ? new Date(value) : value;
-    if (Number.isNaN(date.getTime())) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  };
-
-  const toDateInput = (value?: Date | string | null) => {
-    if (!value) return '';
-    const date = typeof value === 'string' ? new Date(value) : value;
-    if (Number.isNaN(date.getTime())) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  };
-
-  const mapTaskToForm = (task: Task): TaskDialogForm => {
-    const sourceAccountId = task.sourceAccounts[0] || '';
-    const targetAccountId = task.targetAccounts[0] || '';
-    const sourcePlatform = accounts.find((account) => account.id === sourceAccountId)?.platformId || '';
-    const targetPlatform = accounts.find((account) => account.id === targetAccountId)?.platformId || '';
-
-    return {
-      name: task.name || '',
-      description: task.description || '',
-      sourcePlatform,
-      sourceAccountId,
-      targetPlatform,
-      targetAccountId,
-      executionType: task.executionType || 'immediate',
-      scheduleTime: toLocalDateTimeInput(task.scheduleTime),
-      recurringPattern: (task.recurringPattern as 'daily' | 'weekly' | 'monthly' | 'custom') || 'daily',
-      template: task.transformations?.template || '',
-      includeMedia: task.transformations?.includeMedia !== false,
-      enableYtDlp: task.transformations?.enableYtDlp === true,
-      twitterSourceType: (task.filters?.twitterSourceType as 'account' | 'username') || 'account',
-      twitterUsername: task.filters?.twitterUsername || '',
-      excludeReplies: Boolean(task.filters?.excludeReplies),
-      excludeRetweets: Boolean(task.filters?.excludeRetweets),
-      excludeQuotes: Boolean(task.filters?.excludeQuotes),
-      originalOnly: Boolean(task.filters?.originalOnly),
-      pollIntervalSeconds: Number(task.filters?.pollIntervalSeconds || 60),
-      triggerType:
-        (task.filters?.triggerType as
-          | 'on_tweet'
-          | 'on_mention'
-          | 'on_keyword'
-          | 'on_hashtag'
-          | 'on_search'
-          | 'on_retweet'
-          | 'on_like') || 'on_tweet',
-      triggerValue: task.filters?.triggerValue || '',
-      twitterActions: {
-        post: task.transformations?.twitterActions?.post !== false,
-        reply: task.transformations?.twitterActions?.reply === true,
-        quote: task.transformations?.twitterActions?.quote === true,
-        retweet: task.transformations?.twitterActions?.retweet === true,
-        like: task.transformations?.twitterActions?.like === true,
-      },
-      youtubeActions: {
-        uploadVideo: task.transformations?.youtubeActions?.uploadVideo !== false,
-        uploadVideoToPlaylist: task.transformations?.youtubeActions?.uploadVideoToPlaylist === true,
-        playlistId: task.transformations?.youtubeActions?.playlistId || '',
-      },
-      youtubeVideo: {
-        titleTemplate: task.transformations?.youtubeVideo?.titleTemplate || '',
-        descriptionTemplate: task.transformations?.youtubeVideo?.descriptionTemplate || '',
-        tagsText: Array.isArray(task.transformations?.youtubeVideo?.tags)
-          ? task.transformations.youtubeVideo.tags.join(', ')
-          : '',
-        privacyStatus:
-          (task.transformations?.youtubeVideo?.privacyStatus as 'private' | 'unlisted' | 'public') || 'public',
-        categoryId:
-          resolveYouTubeCategoryId(task.transformations?.youtubeVideo?.categoryId) ||
-          DEFAULT_YOUTUBE_CATEGORY_ID,
-        embeddable: task.transformations?.youtubeVideo?.embeddable !== false,
-        license: (task.transformations?.youtubeVideo?.license as 'youtube' | 'creativeCommon') || 'youtube',
-        publicStatsViewable: task.transformations?.youtubeVideo?.publicStatsViewable !== false,
-        selfDeclaredMadeForKids: task.transformations?.youtubeVideo?.selfDeclaredMadeForKids === true,
-        notifySubscribers: task.transformations?.youtubeVideo?.notifySubscribers !== false,
-        publishAt: toLocalDateTimeInput(task.transformations?.youtubeVideo?.publishAt),
-        defaultLanguage: task.transformations?.youtubeVideo?.defaultLanguage || '',
-        defaultAudioLanguage: task.transformations?.youtubeVideo?.defaultAudioLanguage || '',
-        recordingDate: toDateInput(task.transformations?.youtubeVideo?.recordingDate),
-      },
-    };
-  };
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+
     const cacheKey = `tasks:list:${pageSize}:0:${debouncedSearchTerm}:${statusFilter}:${sortBy}:${sortDir}`;
     const cached = getCachedQuery<{
       tasks: Task[];
@@ -241,27 +175,24 @@ function TasksPageContent() {
         const data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load tasks');
         if (cancelled) return;
+
         const list = data.tasks || [];
         const nextOffset = data.nextOffset || 0;
         const nextHasMore = Boolean(data.hasMore);
+
         setTasks(list);
         setFilteredTasks(list);
         setOffset(nextOffset);
         setHasMore(nextHasMore);
-        setCachedQuery(cacheKey, {
-          tasks: list,
-          nextOffset,
-          hasMore: nextHasMore,
-        });
+        setCachedQuery(cacheKey, { tasks: list, nextOffset, hasMore: nextHasMore });
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') return;
-        console.error('[v0] TasksPage: Error loading tasks:', error);
+        console.error('[TasksPage] Error loading tasks:', error);
       } finally {
-        if (!cancelled) {
-          setIsLoadingTasks(false);
-        }
+        if (!cancelled) setIsLoadingTasks(false);
       }
     }
+
     load();
     return () => {
       cancelled = true;
@@ -270,281 +201,39 @@ function TasksPageContent() {
   }, [pageSize, debouncedSearchTerm, statusFilter, sortBy, sortDir]);
 
   useEffect(() => {
-    setFilteredTasks(tasks);
-  }, [tasks]);
-
-  useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
-    const cacheKey = 'tasks:active-accounts';
-    const cached = getCachedQuery<PlatformAccount[]>(cacheKey, 60_000);
-
-    if (cached) {
-      setAccounts(cached);
-    }
-
     async function loadAccounts() {
       try {
-        const res = await fetch('/api/accounts?limit=200&offset=0', {
-          signal: controller.signal,
-        });
+        const res = await fetch('/api/accounts?limit=300&offset=0&presentation=1');
         const data = await res.json();
-        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load accounts');
+        if (!res.ok || !data.success) return;
         if (cancelled) return;
-        const activeAccounts = (data.accounts || []).filter((account: PlatformAccount) => account.isActive);
-        setAccounts(activeAccounts);
-        setCachedQuery(cacheKey, activeAccounts);
-      } catch (error) {
-        if ((error as Error)?.name === 'AbortError') return;
-        console.error('[v0] TasksPage: Error loading accounts for task dialog:', error);
+        const map: Record<string, PlatformAccount> = {};
+        for (const account of (data.accounts || []) as PlatformAccount[]) {
+          map[account.id] = account;
+        }
+        setAccountById(map);
+      } catch {
+        // non-blocking
       }
     }
-    loadAccounts();
+    void loadAccounts();
     return () => {
       cancelled = true;
-      controller.abort();
     };
   }, []);
 
   useEffect(() => {
-    const shouldOpen = searchParams.get('create');
-    if (shouldOpen === '1' || shouldOpen === 'true') {
-      setEditingTaskId(null);
-      setCreateForm(createDefaultTaskForm());
-      setCreateOpen(true);
-      router.replace('/tasks');
-    }
-  }, [searchParams, router]);
-
-  useEffect(() => {
-    if (!editingTaskId || accounts.length === 0) return;
-    setCreateForm((prev) => {
-      if (prev.sourcePlatform && prev.targetPlatform) return prev;
-      const task = tasks.find((item) => item.id === editingTaskId);
-      if (!task) return prev;
-      return { ...prev, ...mapTaskToForm(task) };
-    });
-  }, [editingTaskId, accounts, tasks]);
-
-  const sourceAccounts = accounts.filter(
-    account => account.platformId === createForm.sourcePlatform
-  );
-  const targetAccounts = accounts.filter(
-    account => account.platformId === createForm.targetPlatform
-  );
-  const selectedSourceAccount = accounts.find(
-    account => account.id === createForm.sourceAccountId
-  );
-  const selectedTargetAccount = accounts.find(
-    account => account.id === createForm.targetAccountId
-  );
-  const selectedSourceTwitter = selectedSourceAccount?.platformId === 'twitter';
-  const selectedTargetTwitter = selectedTargetAccount?.platformId === 'twitter';
-  const selectedTargetYouTube = selectedTargetAccount?.platformId === 'youtube';
-  const youtubePlaylists: Array<{ id: string; title: string }> = [];
-  if (selectedTargetYouTube) {
-    const available = Array.isArray((selectedTargetAccount?.credentials as any)?.availablePlaylists)
-      ? (selectedTargetAccount?.credentials as any).availablePlaylists
-      : [];
-    for (const item of available) {
-      const id = String(item?.id || '');
-      const title = String(item?.title || item?.id || '');
-      if (!id || !title) continue;
-      youtubePlaylists.push({ id, title });
-    }
-  }
-
-  const resetCreateForm = () => {
-    setCreateForm(createDefaultTaskForm());
-  };
-
-  const isCreateDraftDirty =
-    !editingTaskId &&
-    JSON.stringify(createForm) !== JSON.stringify(createDefaultTaskForm());
-
-  const openCreateDialog = () => {
-    setEditingTaskId(null);
-    resetCreateForm();
-    setCreateOpen(true);
-  };
-
-  const openEditDialog = (task: Task) => {
-    setEditingTaskId(task.id);
-    setCreateForm(mapTaskToForm(task));
-    setCreateOpen(true);
-  };
-
-  const handleTaskDialogOpenChange = (open: boolean) => {
-    if (!open && isCreateDraftDirty) {
-      const shouldClose = window.confirm('Discard unsaved task draft?');
-      if (!shouldClose) return;
-    }
-    setCreateOpen(open);
-    if (!open) {
-      setEditingTaskId(null);
-      setIsCreating(false);
-      resetCreateForm();
-    }
-  };
-
-  const closeTaskDialogAfterSubmit = () => {
-    setCreateOpen(false);
-    setEditingTaskId(null);
-    setIsCreating(false);
-    resetCreateForm();
-  };
-
-  const handleQuickCreateTask = async () => {
-    if (isCreating) return;
-    if (!createForm.name.trim()) {
-      toast.error('Task name is required');
-      return;
-    }
-    if (!createForm.sourceAccountId || !createForm.targetAccountId) {
-      toast.error('Please select source and target accounts');
-      return;
-    }
-    if (createForm.sourceAccountId === createForm.targetAccountId) {
-      toast.error('Source and target accounts must be different');
-      return;
-    }
-    if (selectedSourceTwitter) {
-      if (createForm.twitterSourceType === 'username' && !createForm.twitterUsername.trim()) {
-        toast.error('Please enter a Twitter username for the source');
-        return;
-      }
-      if (createForm.triggerType === 'on_like' && createForm.twitterSourceType === 'username') {
-        toast.error('Liked-tweet trigger requires a connected Twitter account');
-        return;
-      }
-      if (
-        (createForm.triggerType === 'on_keyword' ||
-          createForm.triggerType === 'on_hashtag' ||
-          createForm.triggerType === 'on_search') &&
-        !createForm.triggerValue.trim()
-      ) {
-        toast.error('Please enter a trigger value for the selected trigger type');
-        return;
-      }
-    }
-    if (createForm.executionType === 'scheduled' && !createForm.scheduleTime) {
-      toast.error('Please choose a schedule time');
-      return;
-    }
-    if (
-      selectedTargetYouTube &&
-      createForm.youtubeActions.uploadVideoToPlaylist &&
-      !createForm.youtubeActions.playlistId
-    ) {
-      toast.error('Please select a YouTube playlist or disable "Upload video to playlist".');
-      return;
-    }
-
-    try {
-      setIsCreating(true);
-      const requestBody = {
-        name: createForm.name.trim(),
-        description: createForm.description.trim(),
-        sourceAccounts: [createForm.sourceAccountId],
-        targetAccounts: [createForm.targetAccountId],
-        contentType: 'text',
-        status: 'active',
-        executionType: createForm.executionType,
-        scheduleTime:
-          createForm.executionType === 'scheduled' && createForm.scheduleTime
-            ? new Date(createForm.scheduleTime).toISOString()
-            : undefined,
-        recurringPattern:
-          createForm.executionType === 'recurring'
-            ? createForm.recurringPattern
-            : undefined,
-        transformations: {
-          template: createForm.template || undefined,
-          includeMedia: createForm.includeMedia,
-          enableYtDlp: createForm.enableYtDlp,
-          twitterActions: createForm.twitterActions,
-          youtubeActions: {
-            uploadVideo: createForm.youtubeActions.uploadVideo,
-            uploadVideoToPlaylist: createForm.youtubeActions.uploadVideoToPlaylist,
-            playlistId: createForm.youtubeActions.uploadVideoToPlaylist
-              ? createForm.youtubeActions.playlistId || undefined
-              : undefined,
-          },
-          youtubeVideo: {
-            titleTemplate: createForm.youtubeVideo.titleTemplate || undefined,
-            descriptionTemplate: createForm.youtubeVideo.descriptionTemplate || undefined,
-            tags: createForm.youtubeVideo.tagsText
-              .split(/[\n,]/)
-              .map((tag) => tag.trim())
-              .filter(Boolean),
-            privacyStatus: createForm.youtubeVideo.privacyStatus,
-            categoryId:
-              resolveYouTubeCategoryId(createForm.youtubeVideo.categoryId) ||
-              DEFAULT_YOUTUBE_CATEGORY_ID,
-            embeddable: createForm.youtubeVideo.embeddable,
-            license: createForm.youtubeVideo.license,
-            publicStatsViewable: createForm.youtubeVideo.publicStatsViewable,
-            selfDeclaredMadeForKids: createForm.youtubeVideo.selfDeclaredMadeForKids,
-            notifySubscribers: createForm.youtubeVideo.notifySubscribers,
-            publishAt: createForm.youtubeVideo.publishAt
-              ? new Date(createForm.youtubeVideo.publishAt).toISOString()
-              : undefined,
-            defaultLanguage: createForm.youtubeVideo.defaultLanguage || undefined,
-            defaultAudioLanguage: createForm.youtubeVideo.defaultAudioLanguage || undefined,
-            recordingDate: createForm.youtubeVideo.recordingDate
-              ? new Date(`${createForm.youtubeVideo.recordingDate}T00:00:00.000Z`).toISOString()
-              : undefined,
-          },
-        },
-        filters: selectedSourceTwitter
-          ? {
-              twitterSourceType: createForm.twitterSourceType,
-              twitterUsername: createForm.twitterUsername.trim() || undefined,
-              excludeReplies: createForm.excludeReplies,
-              excludeRetweets: createForm.excludeRetweets,
-              excludeQuotes: createForm.excludeQuotes,
-              originalOnly: createForm.originalOnly,
-              pollIntervalSeconds: Number(createForm.pollIntervalSeconds || 60),
-              triggerType: createForm.triggerType,
-              triggerValue: createForm.triggerValue.trim() || undefined,
-            }
-          : undefined,
-      };
-
-      const isEditMode = Boolean(editingTaskId);
-      const endpoint = isEditMode ? `/api/tasks/${editingTaskId}` : '/api/tasks';
-      const method = isEditMode ? 'PATCH' : 'POST';
-      const res = await fetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || (isEditMode ? 'Failed to update task' : 'Failed to create task'));
-
-      if (isEditMode) {
-        setTasks((prev) => prev.map((task) => (task.id === data.task.id ? data.task : task)));
-        setFilteredTasks((prev) => prev.map((task) => (task.id === data.task.id ? data.task : task)));
-        toast.success('Task updated successfully');
-      } else {
-        setTasks(prev => [data.task, ...prev]);
-        setFilteredTasks(prev => [data.task, ...prev]);
-        toast.success(data.duplicate ? 'Task already exists and was reused' : 'Task created successfully');
-      }
-      closeTaskDialogAfterSubmit();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : (editingTaskId ? 'Failed to update task' : 'Failed to create task'));
-    } finally {
-      setIsCreating(false);
-    }
-  };
+    setFilteredTasks(tasks);
+  }, [tasks]);
 
   const handleLoadMore = async () => {
     if (isLoadingMore) return;
     try {
       setIsLoadingMore(true);
+      const statusParam = statusFilter === 'all' ? '' : `&status=${statusFilter}`;
       const res = await fetch(
-        `/api/tasks?limit=${pageSize}&offset=${offset}&search=${encodeURIComponent(debouncedSearchTerm)}${statusFilter === 'all' ? '' : `&status=${statusFilter}`}&sortBy=${sortBy}&sortDir=${sortDir}`
+        `/api/tasks?limit=${pageSize}&offset=${offset}&search=${encodeURIComponent(debouncedSearchTerm)}${statusParam}&sortBy=${sortBy}&sortDir=${sortDir}`
       );
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load tasks');
@@ -554,14 +243,13 @@ function TasksPageContent() {
       setOffset(data.nextOffset || offset);
       setHasMore(Boolean(data.hasMore));
     } catch (error) {
-      console.error('[v0] TasksPage: Error loading more tasks:', error);
+      console.error('[TasksPage] Error loading more tasks:', error);
     } finally {
       setIsLoadingMore(false);
     }
   };
 
   const handleDelete = async (taskId: string) => {
-    console.log('[v0] handleDelete: Attempting to delete task:', taskId);
     const accepted = await confirm({
       title: 'Delete Task?',
       description: 'This action is permanent and cannot be undone.',
@@ -570,40 +258,68 @@ function TasksPageContent() {
     });
     if (!accepted) return;
 
-    fetch(`/api/tasks/${taskId}`, { method: 'DELETE' })
-      .then(res => res.json())
-      .then(data => {
-        if (!data.success) throw new Error(data.error || 'Failed to delete task');
-        setTasks(tasks.filter(t => t.id !== taskId));
-        toast.success('Task deleted successfully');
-      })
-      .catch(error => {
-        console.error('[v0] handleDelete: Error deleting task:', error);
-        toast.error(error instanceof Error ? error.message : 'Failed to delete task');
-      });
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete task');
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      toast.success('Task deleted successfully');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete task');
+    }
   };
 
-  const handleToggleStatus = (task: Task) => {
+  const handleToggleStatus = async (task: Task) => {
     const newStatus = task.status === 'active' ? 'paused' : 'active';
-    console.log('[v0] handleToggleStatus: Changing status of task:', task.id, 'to:', newStatus);
-    fetch(`/api/tasks/${task.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus }),
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (!data.success) throw new Error(data.error || 'Failed to update task');
-        setTasks(tasks.map(t => (t.id === task.id ? { ...t, status: newStatus as any } : t)));
-        toast.success(newStatus === 'active' ? 'Task resumed' : 'Task paused');
-      })
-      .catch(error => {
-        console.error('[v0] handleToggleStatus: Error updating status:', error);
-        toast.error(error instanceof Error ? error.message : 'Failed to update task');
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update task');
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: newStatus as any } : t)));
+      toast.success(newStatus === 'active' ? 'Task resumed' : 'Task paused');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update task');
+    }
   };
+
+  const handleRunNow = async (task: Task) => {
+    if (runningTaskIds[task.id]) return;
+    setRunningTaskIds((prev) => ({ ...prev, [task.id]: true }));
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/run`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to run task');
+      const executionCount = Array.isArray(data.executions) ? data.executions.length : 0;
+      setTasks((prev) =>
+        prev.map((item) =>
+          item.id === task.id
+            ? {
+                ...item,
+                lastExecuted: new Date(),
+              }
+            : item
+        )
+      );
+      toast.success(executionCount > 0 ? `Task executed (${executionCount} transfer(s))` : 'Task run started');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to run task');
+    } finally {
+      setRunningTaskIds((prev) => ({ ...prev, [task.id]: false }));
+    }
+  };
+
   const activeTasksCount = filteredTasks.filter((task) => task.status === 'active').length;
   const pausedTasksCount = filteredTasks.filter((task) => task.status === 'paused').length;
+  const completedTasksCount = filteredTasks.filter((task) => task.status === 'completed').length;
+  const erroredTasksCount = filteredTasks.filter((task) => task.status === 'error').length;
+  const totalRoutes = filteredTasks.reduce(
+    (sum, task) => sum + Math.max(1, task.sourceAccounts.length) * Math.max(1, task.targetAccounts.length),
+    0
+  );
   const isInitialLoading = isLoadingTasks && tasks.length === 0;
 
   return (
@@ -614,13 +330,12 @@ function TasksPageContent() {
       <main className="control-main">
         <div className="page-header animate-fade-up">
           <div>
-            <p className="kpi-pill mb-3">Automation Pipelines</p>
-            <h1 className="page-title">
-              My Tasks
-            </h1>
-            <p className="page-subtitle">
-              Manage and monitor your automation tasks
+            <p className="kpi-pill mb-3 inline-flex items-center gap-1.5">
+              <Sparkles size={12} />
+              Automation Pipelines
             </p>
+            <h1 className="page-title">My Tasks</h1>
+            <p className="page-subtitle">Manage and monitor your automation tasks</p>
             <div className="mt-4 flex flex-wrap gap-2 text-xs">
               {isInitialLoading ? (
                 <>
@@ -633,823 +348,23 @@ function TasksPageContent() {
                   <span className="kpi-pill">{filteredTasks.length} visible</span>
                   <span className="kpi-pill">{activeTasksCount} active</span>
                   <span className="kpi-pill">{pausedTasksCount} paused</span>
+                  <span className="kpi-pill">{completedTasksCount} completed</span>
+                  <span className="kpi-pill">{erroredTasksCount} error</span>
+                  <span className="kpi-pill">{totalRoutes} routes</span>
                 </>
               )}
             </div>
           </div>
-          <Dialog open={createOpen} onOpenChange={handleTaskDialogOpenChange}>
-            <Button size="lg" className="animate-float-soft" onClick={openCreateDialog}>
+
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => (window.location.href = '/api/tasks/export')}>
+              Export CSV
+            </Button>
+            <Button size="lg" className="animate-float-soft" onClick={() => router.push('/tasks/new')}>
               <Plus size={18} />
               Create New Task
             </Button>
-            <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{editingTaskId ? 'Edit Task' : 'Create New Task'}</DialogTitle>
-                <DialogDescription>
-                  {editingTaskId
-                    ? 'Update task settings directly from this popup.'
-                    : 'Create a task directly from this popup.'}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div className="sm:col-span-2">
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Task Name
-                    </label>
-                    <Input
-                      placeholder="e.g., Instagram to X Auto Sync"
-                      value={createForm.name}
-                      onChange={(e) =>
-                        setCreateForm(prev => ({ ...prev, name: e.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Description
-                    </label>
-                    <Textarea
-                      placeholder="Optional task description..."
-                      value={createForm.description}
-                      onChange={(e) =>
-                        setCreateForm(prev => ({ ...prev, description: e.target.value }))
-                      }
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Source Platform
-                    </label>
-                    <Select
-                      value={createForm.sourcePlatform}
-                      onValueChange={(value) =>
-                        setCreateForm(prev => ({
-                          ...prev,
-                          sourcePlatform: value,
-                          sourceAccountId: '',
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select source platform" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(platformConfigs).map(([platformId, config]) => (
-                          <SelectItem key={platformId} value={platformId}>
-                            <span className="inline-flex items-center gap-2">
-                              <PlatformIcon platformId={platformId as PlatformId} size={16} />
-                              <span>{config.name}</span>
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Source Account
-                    </label>
-                    <Select
-                      value={createForm.sourceAccountId}
-                      onValueChange={(value) =>
-                        setCreateForm(prev => ({ ...prev, sourceAccountId: value }))
-                      }
-                      disabled={!createForm.sourcePlatform}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select source account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sourceAccounts.map((account) => (
-                          <SelectItem key={account.id} value={account.id}>
-                            {account.accountName || account.accountUsername || account.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Target Platform
-                    </label>
-                    <Select
-                      value={createForm.targetPlatform}
-                      onValueChange={(value) =>
-                        setCreateForm(prev => ({
-                          ...prev,
-                          targetPlatform: value,
-                          targetAccountId: '',
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select target platform" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(platformConfigs).map(([platformId, config]) => (
-                          <SelectItem key={platformId} value={platformId}>
-                            <span className="inline-flex items-center gap-2">
-                              <PlatformIcon platformId={platformId as PlatformId} size={16} />
-                              <span>{config.name}</span>
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Target Account
-                    </label>
-                    <Select
-                      value={createForm.targetAccountId}
-                      onValueChange={(value) =>
-                        setCreateForm(prev => ({ ...prev, targetAccountId: value }))
-                      }
-                      disabled={!createForm.targetPlatform}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select target account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {targetAccounts.map((account) => (
-                          <SelectItem key={account.id} value={account.id}>
-                            {account.accountName || account.accountUsername || account.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-foreground">
-                      Execution Type
-                    </label>
-                    <Select
-                      value={createForm.executionType}
-                      onValueChange={(value: 'immediate' | 'scheduled' | 'recurring') =>
-                        setCreateForm(prev => ({ ...prev, executionType: value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="immediate">Immediate</SelectItem>
-                        <SelectItem value="scheduled">Scheduled</SelectItem>
-                        <SelectItem value="recurring">Recurring</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {createForm.executionType === 'scheduled' && (
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-foreground">
-                        Schedule Time
-                      </label>
-                      <Input
-                        type="datetime-local"
-                        value={createForm.scheduleTime}
-                        onChange={(e) =>
-                          setCreateForm(prev => ({ ...prev, scheduleTime: e.target.value }))
-                        }
-                      />
-                    </div>
-                  )}
-                  {createForm.executionType === 'recurring' && (
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-foreground">
-                        Recurrence Pattern
-                      </label>
-                      <Select
-                        value={createForm.recurringPattern}
-                        onValueChange={(value: 'daily' | 'weekly' | 'monthly' | 'custom') =>
-                          setCreateForm(prev => ({ ...prev, recurringPattern: value }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="daily">Daily</SelectItem>
-                          <SelectItem value="weekly">Weekly</SelectItem>
-                          <SelectItem value="monthly">Monthly</SelectItem>
-                          <SelectItem value="custom">Custom</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-
-                <div className="rounded-xl border border-border/70 p-4 space-y-3">
-                  <label className="block text-sm font-medium text-foreground">
-                    Message Template
-                  </label>
-                  <Textarea
-                    placeholder="%name% (@%username%)&#10;%date%&#10;%text%&#10;%link%"
-                    value={createForm.template}
-                    onChange={(e) =>
-                      setCreateForm(prev => ({ ...prev, template: e.target.value }))
-                    }
-                  />
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={createForm.includeMedia}
-                        onChange={(e) =>
-                          setCreateForm(prev => ({ ...prev, includeMedia: e.target.checked }))
-                        }
-                      />
-                      Include media
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={createForm.enableYtDlp}
-                        onChange={(e) =>
-                          setCreateForm(prev => ({ ...prev, enableYtDlp: e.target.checked }))
-                        }
-                      />
-                      Enable yt-dlp for Twitter videos
-                    </label>
-                  </div>
-                </div>
-
-                {selectedSourceTwitter && (
-                  <div className="rounded-xl border border-border/70 p-4 space-y-3">
-                    <h4 className="text-sm font-semibold text-foreground">Twitter Source Settings</h4>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Source Type
-                        </label>
-                        <Select
-                          value={createForm.twitterSourceType}
-                          onValueChange={(value: 'account' | 'username') =>
-                            setCreateForm(prev => ({ ...prev, twitterSourceType: value }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="account">Connected Account</SelectItem>
-                            <SelectItem value="username">Username</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {createForm.twitterSourceType === 'username' && (
-                        <div>
-                          <label className="mb-2 block text-sm font-medium text-foreground">
-                            Twitter Username
-                          </label>
-                          <Input
-                            placeholder="username (without @)"
-                            value={createForm.twitterUsername}
-                            onChange={(e) =>
-                              setCreateForm(prev => ({ ...prev, twitterUsername: e.target.value }))
-                            }
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.excludeReplies}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({ ...prev, excludeReplies: e.target.checked }))
-                          }
-                        />
-                        Exclude replies
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.excludeRetweets}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({ ...prev, excludeRetweets: e.target.checked }))
-                          }
-                        />
-                        Exclude retweets
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.excludeQuotes}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({ ...prev, excludeQuotes: e.target.checked }))
-                          }
-                        />
-                        Exclude quotes
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.originalOnly}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({ ...prev, originalOnly: e.target.checked }))
-                          }
-                        />
-                        Original tweets only
-                      </label>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Trigger Type
-                        </label>
-                        <Select
-                          value={createForm.triggerType}
-                          onValueChange={(
-                            value:
-                              | 'on_tweet'
-                              | 'on_mention'
-                              | 'on_keyword'
-                              | 'on_hashtag'
-                              | 'on_search'
-                              | 'on_retweet'
-                              | 'on_like'
-                          ) => setCreateForm(prev => ({ ...prev, triggerType: value }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="on_tweet">On Tweet</SelectItem>
-                            <SelectItem value="on_mention">On Mention</SelectItem>
-                            <SelectItem value="on_keyword">On Keyword</SelectItem>
-                            <SelectItem value="on_hashtag">On Hashtag</SelectItem>
-                            <SelectItem value="on_search">On Search</SelectItem>
-                            <SelectItem value="on_retweet">On Retweet</SelectItem>
-                            <SelectItem value="on_like">On Like</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Poll Interval (seconds)
-                        </label>
-                        <Input
-                          type="number"
-                          min={10}
-                          value={createForm.pollIntervalSeconds}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              pollIntervalSeconds: Number(e.target.value || 60),
-                            }))
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    {(createForm.triggerType === 'on_keyword' ||
-                      createForm.triggerType === 'on_hashtag' ||
-                      createForm.triggerType === 'on_search') && (
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Trigger Value
-                        </label>
-                        <Input
-                          placeholder="keyword, #hashtag, or search query"
-                          value={createForm.triggerValue}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({ ...prev, triggerValue: e.target.value }))
-                          }
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {selectedTargetTwitter && (
-                  <div className="rounded-xl border border-border/70 p-4 space-y-3">
-                    <h4 className="text-sm font-semibold text-foreground">Twitter Target Actions</h4>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.twitterActions.post}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              twitterActions: { ...prev.twitterActions, post: e.target.checked },
-                            }))
-                          }
-                        />
-                        Post
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.twitterActions.reply}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              twitterActions: { ...prev.twitterActions, reply: e.target.checked },
-                            }))
-                          }
-                        />
-                        Reply
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.twitterActions.quote}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              twitterActions: { ...prev.twitterActions, quote: e.target.checked },
-                            }))
-                          }
-                        />
-                        Quote
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.twitterActions.retweet}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              twitterActions: { ...prev.twitterActions, retweet: e.target.checked },
-                            }))
-                          }
-                        />
-                        Retweet
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.twitterActions.like}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              twitterActions: { ...prev.twitterActions, like: e.target.checked },
-                            }))
-                          }
-                        />
-                        Like
-                      </label>
-                    </div>
-                  </div>
-                )}
-
-                {selectedTargetYouTube && (
-                  <div className="rounded-xl border border-border/70 p-4 space-y-3">
-                    <h4 className="text-sm font-semibold text-foreground">YouTube Target Settings</h4>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.youtubeActions.uploadVideo}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeActions: {
-                                ...prev.youtubeActions,
-                                uploadVideo: e.target.checked,
-                              },
-                            }))
-                          }
-                        />
-                        Upload video
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.youtubeActions.uploadVideoToPlaylist}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeActions: {
-                                ...prev.youtubeActions,
-                                uploadVideoToPlaylist: e.target.checked,
-                              },
-                            }))
-                          }
-                        />
-                        Upload to playlist
-                      </label>
-                    </div>
-                    {createForm.youtubeActions.uploadVideoToPlaylist && (
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Playlist
-                        </label>
-                        {youtubePlaylists.length > 0 ? (
-                          <Select
-                            value={createForm.youtubeActions.playlistId}
-                            onValueChange={(value) =>
-                              setCreateForm(prev => ({
-                                ...prev,
-                                youtubeActions: { ...prev.youtubeActions, playlistId: value },
-                              }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select playlist" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {youtubePlaylists.map((playlist) => (
-                                <SelectItem key={playlist.id} value={playlist.id}>
-                                  {playlist.title}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            No playlists found on selected YouTube account.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Video Title Template
-                        </label>
-                        <Input
-                          placeholder="%text%"
-                          value={createForm.youtubeVideo.titleTemplate}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, titleTemplate: e.target.value },
-                            }))
-                          }
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Tags (comma or new line)
-                        </label>
-                        <Input
-                          placeholder="automation, social, news"
-                          value={createForm.youtubeVideo.tagsText}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, tagsText: e.target.value },
-                            }))
-                          }
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-foreground">
-                        Video Description Template
-                      </label>
-                      <Textarea
-                        placeholder="%text%&#10;&#10;%link%"
-                        value={createForm.youtubeVideo.descriptionTemplate}
-                        onChange={(e) =>
-                          setCreateForm(prev => ({
-                            ...prev,
-                            youtubeVideo: {
-                              ...prev.youtubeVideo,
-                              descriptionTemplate: e.target.value,
-                            },
-                          }))
-                        }
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Privacy
-                        </label>
-                        <Select
-                          value={createForm.youtubeVideo.privacyStatus}
-                          onValueChange={(value: 'private' | 'unlisted' | 'public') =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, privacyStatus: value },
-                            }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="public">Public</SelectItem>
-                            <SelectItem value="unlisted">Unlisted</SelectItem>
-                            <SelectItem value="private">Private</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Category
-                        </label>
-                        <Select
-                          value={createForm.youtubeVideo.categoryId}
-                          onValueChange={(value: string) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, categoryId: value },
-                            }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {YOUTUBE_VIDEO_CATEGORIES.map((category) => (
-                              <SelectItem key={category.id} value={category.id}>
-                                {category.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          License
-                        </label>
-                        <Select
-                          value={createForm.youtubeVideo.license}
-                          onValueChange={(value: 'youtube' | 'creativeCommon') =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, license: value },
-                            }))
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="youtube">YouTube</SelectItem>
-                            <SelectItem value="creativeCommon">Creative Commons</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Publish At
-                        </label>
-                        <Input
-                          type="datetime-local"
-                          value={createForm.youtubeVideo.publishAt}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, publishAt: e.target.value },
-                            }))
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Default Language
-                        </label>
-                        <Input
-                          placeholder="en"
-                          value={createForm.youtubeVideo.defaultLanguage}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: {
-                                ...prev.youtubeVideo,
-                                defaultLanguage: e.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-foreground">
-                          Default Audio Language
-                        </label>
-                        <Input
-                          placeholder="en"
-                          value={createForm.youtubeVideo.defaultAudioLanguage}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: {
-                                ...prev.youtubeVideo,
-                                defaultAudioLanguage: e.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-foreground">
-                        Recording Date
-                      </label>
-                      <Input
-                        type="date"
-                        value={createForm.youtubeVideo.recordingDate}
-                        onChange={(e) =>
-                          setCreateForm(prev => ({
-                            ...prev,
-                            youtubeVideo: {
-                              ...prev.youtubeVideo,
-                              recordingDate: e.target.value,
-                            },
-                          }))
-                        }
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.youtubeVideo.embeddable}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: { ...prev.youtubeVideo, embeddable: e.target.checked },
-                            }))
-                          }
-                        />
-                        Embeddable
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.youtubeVideo.publicStatsViewable}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: {
-                                ...prev.youtubeVideo,
-                                publicStatsViewable: e.target.checked,
-                              },
-                            }))
-                          }
-                        />
-                        Public stats viewable
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.youtubeVideo.selfDeclaredMadeForKids}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: {
-                                ...prev.youtubeVideo,
-                                selfDeclaredMadeForKids: e.target.checked,
-                              },
-                            }))
-                          }
-                        />
-                        Made for kids
-                      </label>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={createForm.youtubeVideo.notifySubscribers}
-                          onChange={(e) =>
-                            setCreateForm(prev => ({
-                              ...prev,
-                              youtubeVideo: {
-                                ...prev.youtubeVideo,
-                                notifySubscribers: e.target.checked,
-                              },
-                            }))
-                          }
-                        />
-                        Notify subscribers
-                      </label>
-                    </div>
-                  </div>
-                )}
-              </div>
-              <DialogFooter className="gap-2">
-                <Button
-                  type="button"
-                  onClick={handleQuickCreateTask}
-                  disabled={isCreating}
-                >
-                  {isCreating ? (editingTaskId ? 'Saving...' : 'Creating...') : (editingTaskId ? 'Save Changes' : 'Create Task')}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          </div>
         </div>
 
         <Card className="mb-6 animate-fade-up sticky-toolbar">
@@ -1457,9 +372,9 @@ function TasksPageContent() {
             <CardTitle>Search Tasks</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="relative">
-                <Search size={18} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground" />
+                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Search by name or description..."
                   value={searchTerm}
@@ -1468,12 +383,7 @@ function TasksPageContent() {
                 />
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <Select
-                  value={statusFilter}
-                  onValueChange={(value: 'all' | 'active' | 'paused' | 'completed' | 'error') =>
-                    setStatusFilter(value)
-                  }
-                >
+                <Select value={statusFilter} onValueChange={(value: any) => setStatusFilter(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -1507,21 +417,8 @@ function TasksPageContent() {
                 </Select>
               </div>
             </div>
+
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant={viewMode === 'cards' ? 'default' : 'outline'}
-                onClick={() => setViewMode('cards')}
-              >
-                Cards
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === 'compact' ? 'default' : 'outline'}
-                onClick={() => setViewMode('compact')}
-              >
-                Compact
-              </Button>
               {(searchTerm || statusFilter !== 'all') && (
                 <Button
                   size="sm"
@@ -1537,16 +434,6 @@ function TasksPageContent() {
             </div>
           </CardContent>
         </Card>
-        <div className="mb-6 flex justify-end animate-fade-up-delay">
-          <Button
-            variant="outline"
-            onClick={() => {
-              window.location.href = '/api/tasks/export';
-            }}
-          >
-            Export CSV
-          </Button>
-        </div>
 
         {isInitialLoading ? (
           <div className="space-y-4 animate-fade-up-delay">
@@ -1565,11 +452,11 @@ function TasksPageContent() {
         ) : filteredTasks.length === 0 ? (
           <Card className="animate-fade-up-delay">
             <CardContent className="py-12 text-center">
-              <p className="text-muted-foreground mb-4">
+              <p className="mb-4 text-muted-foreground">
                 No tasks found. {tasks.length === 0 ? 'Create your first task to get started.' : 'Try a different search.'}
               </p>
               {tasks.length === 0 && (
-                <Button onClick={openCreateDialog}>
+                <Button onClick={() => router.push('/tasks/new')}>
                   <Plus size={18} className="mr-2" />
                   Create Your First Task
                 </Button>
@@ -1578,92 +465,186 @@ function TasksPageContent() {
           </Card>
         ) : (
           <>
-            <div className={cn('grid grid-cols-1', viewMode === 'compact' ? 'gap-2' : 'gap-4')}>
-              {filteredTasks.map((task) => (
-                <Card key={task.id} className={cn('animate-fade-up hover:border-primary/45 transition-colors', viewMode === 'compact' && 'rounded-xl')}>
-                  <CardContent className={cn(viewMode === 'compact' ? 'p-4' : 'p-6')}>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="flex-1">
-                        <div className="mb-2 flex flex-wrap items-center gap-3">
-                          <h3 className="text-lg font-semibold text-foreground">
-                            {task.name}
-                          </h3>
-                          <span
-                            className={`status-pill ${
-                              task.status === 'active'
-                                ? 'status-pill--success'
-                                : 'status-pill--neutral'
-                            }`}
-                          >
-                            {task.status}
-                          </span>
-                        </div>
+            <div className="grid grid-cols-1 gap-4">
+              {filteredTasks.map((task) => {
+                const statusMeta = STATUS_META[task.status] || STATUS_META.paused;
+                const sourceAccounts = task.sourceAccounts
+                  .map((id) => accountById[id])
+                  .filter(Boolean) as PlatformAccount[];
+                const targetAccounts = task.targetAccounts
+                  .map((id) => accountById[id])
+                  .filter(Boolean) as PlatformAccount[];
+                const sourcePlatforms = uniquePlatformIdsForAccounts(task.sourceAccounts, accountById);
+                const targetPlatforms = uniquePlatformIdsForAccounts(task.targetAccounts, accountById);
+                const routeCount =
+                  Math.max(1, task.sourceAccounts.length) * Math.max(1, task.targetAccounts.length);
 
-                        <p className="text-muted-foreground mb-3 leading-relaxed">
-                          {task.description}
-                        </p>
+                return (
+                  <Card
+                    key={task.id}
+                    className="animate-fade-up border-border/70 bg-card/70 transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/45 hover:shadow-[0_18px_42px_-30px_color-mix(in_oklch,var(--primary)_65%,transparent)]"
+                  >
+                    <CardContent className="p-6">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex-1">
+                          <div className="mb-2 flex flex-wrap items-center gap-3">
+                            <h3 className="text-lg font-semibold text-foreground">{task.name}</h3>
+                            <span className={cn('status-pill', statusMeta.tone)}>{statusMeta.label}</span>
+                            <span className="rounded-full border border-border/70 bg-card/65 px-2.5 py-1 text-[11px] text-muted-foreground">
+                              {statusMeta.runHint}
+                            </span>
+                          </div>
 
-                        <div className="flex flex-wrap gap-4 text-sm">
-                          <div>
-                            <p className="text-muted-foreground">Source:</p>
-                            <p className="font-medium text-foreground">
-                              {task.sourceAccounts.length} account(s)
-                            </p>
+                          <p className="mb-4 leading-relaxed text-muted-foreground">
+                            {task.description?.trim() || 'No description provided.'}
+                          </p>
+
+                          <div className="mb-3 inline-flex items-center gap-2 rounded-xl border border-border/70 bg-card/55 px-3 py-1.5 text-xs text-muted-foreground">
+                            <span className="inline-flex items-center gap-1">
+                              {sourcePlatforms.slice(0, 3).map((platformId) => (
+                                <PlatformIcon
+                                  key={`flow-src-${task.id}-${platformId}`}
+                                  platformId={platformId as PlatformId}
+                                  size={13}
+                                />
+                              ))}
+                              {sourcePlatforms.length > 3 ? <span>+{sourcePlatforms.length - 3}</span> : null}
+                            </span>
+                            <ArrowRight size={12} className="opacity-70" />
+                            <span className="inline-flex items-center gap-1">
+                              {targetPlatforms.slice(0, 3).map((platformId) => (
+                                <PlatformIcon
+                                  key={`flow-dst-${task.id}-${platformId}`}
+                                  platformId={platformId as PlatformId}
+                                  size={13}
+                                />
+                              ))}
+                              {targetPlatforms.length > 3 ? <span>+{targetPlatforms.length - 3}</span> : null}
+                            </span>
+                            <span className="text-foreground/80">{routeCount} route(s)</span>
                           </div>
-                          <div>
-                            <p className="text-muted-foreground">Target:</p>
-                            <p className="font-medium text-foreground">
-                              {task.targetAccounts.length} account(s)
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-muted-foreground">Type:</p>
-                            <p className="font-medium text-foreground">
-                              {task.executionType}
-                            </p>
-                          </div>
-                          {task.lastExecuted && (
+
+                          <div className="grid gap-3 text-sm md:grid-cols-2">
                             <div>
-                              <p className="text-muted-foreground">Last run:</p>
-                              <p className="font-medium text-foreground">
-                                {new Date(task.lastExecuted).toLocaleDateString()}
-                              </p>
+                              <p className="mb-1.5 text-muted-foreground">Source</p>
+                              <div className="flex flex-wrap gap-2">
+                                {sourceAccounts.length === 0 ? (
+                                  <span className="text-xs text-muted-foreground">
+                                    {task.sourceAccounts.length > 0
+                                      ? 'Loading source account details...'
+                                      : 'No source accounts'}
+                                  </span>
+                                ) : (
+                                  sourceAccounts.map((account) => {
+                                    const avatar = resolveAccountAvatar(account);
+                                    return (
+                                      <span
+                                        key={`src-account-${task.id}-${account.id}`}
+                                        className="inline-flex max-w-full items-center gap-2 rounded-full border border-border/70 bg-card/75 px-2 py-1"
+                                      >
+                                        {avatar ? (
+                                          <img
+                                            src={avatar}
+                                            alt={accountDisplayName(account)}
+                                            className="h-5 w-5 rounded-full object-cover"
+                                            loading="lazy"
+                                          />
+                                        ) : (
+                                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
+                                            {accountDisplayName(account).charAt(0).toUpperCase()}
+                                          </span>
+                                        )}
+                                        <span className="truncate text-xs font-medium text-foreground">
+                                          {accountDisplayName(account)}
+                                        </span>
+                                        <PlatformIcon platformId={account.platformId as PlatformId} size={12} />
+                                      </span>
+                                    );
+                                  })
+                                )}
+                              </div>
                             </div>
-                          )}
+
+                            <div>
+                              <p className="mb-1.5 text-muted-foreground">Target</p>
+                              <div className="flex flex-wrap gap-2">
+                                {targetAccounts.length === 0 ? (
+                                  <span className="text-xs text-muted-foreground">
+                                    {task.targetAccounts.length > 0
+                                      ? 'Loading target account details...'
+                                      : 'No target accounts'}
+                                  </span>
+                                ) : (
+                                  targetAccounts.map((account) => {
+                                    const avatar = resolveAccountAvatar(account);
+                                    return (
+                                      <span
+                                        key={`target-account-${task.id}-${account.id}`}
+                                        className="inline-flex max-w-full items-center gap-2 rounded-full border border-border/70 bg-card/75 px-2 py-1"
+                                      >
+                                        {avatar ? (
+                                          <img
+                                            src={avatar}
+                                            alt={accountDisplayName(account)}
+                                            className="h-5 w-5 rounded-full object-cover"
+                                            loading="lazy"
+                                          />
+                                        ) : (
+                                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
+                                            {accountDisplayName(account).charAt(0).toUpperCase()}
+                                          </span>
+                                        )}
+                                        <span className="truncate text-xs font-medium text-foreground">
+                                          {accountDisplayName(account)}
+                                        </span>
+                                        <PlatformIcon platformId={account.platformId as PlatformId} size={12} />
+                                      </span>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-card/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+                            <Clock3 size={12} />
+                            Last run: <span className="text-foreground/85">{getRelativeLastRun(task.lastExecuted)}</span>
+                          </div>
+                        </div>
+
+                        <div className="ml-0 flex flex-wrap items-center gap-2 sm:ml-4 sm:self-start">
+                          <Button variant="outline" size="icon" onClick={() => handleToggleStatus(task)} title={statusMeta.buttonLabel}>
+                            {task.status === 'active' ? <Pause size={18} /> : <Play size={18} />}
+                          </Button>
+
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRunNow(task)}
+                            disabled={Boolean(runningTaskIds[task.id])}
+                          >
+                            {runningTaskIds[task.id] ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                            Run
+                          </Button>
+
+                          <Button variant="outline" size="icon" onClick={() => router.push(`/tasks/${task.id}/edit`)}>
+                            <Edit2 size={18} />
+                          </Button>
+
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={() => handleDelete(task.id)}
+                            className="text-destructive hover:bg-destructive/10"
+                          >
+                            <Trash2 size={18} />
+                          </Button>
                         </div>
                       </div>
-
-                      <div className="ml-0 flex flex-wrap items-center gap-2 sm:ml-4 sm:self-start">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => handleToggleStatus(task)}
-                        >
-                          {task.status === 'active' ? (
-                            <Pause size={18} />
-                          ) : (
-                            <Play size={18} />
-                          )}
-                        </Button>
-
-                        <Button variant="outline" size="icon" onClick={() => openEditDialog(task)}>
-                          <Edit2 size={18} />
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => handleDelete(task.id)}
-                          className="text-destructive hover:bg-destructive/10"
-                        >
-                          <Trash2 size={18} />
-                        </Button>
-
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
             {hasMore && (
               <div className="mt-6 flex justify-center">
@@ -1674,15 +655,35 @@ function TasksPageContent() {
             )}
           </>
         )}
+
+        {ConfirmDialog}
       </main>
-      {ConfirmDialog}
     </div>
   );
 }
 
 export default function TasksPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-background control-app" />}>
+    <Suspense
+      fallback={
+        <div className="splash-overlay" role="status" aria-live="polite" aria-busy="true">
+          <div className="splash-overlay__glow" />
+          <div className="splash-overlay__panel">
+            <div className="splash-overlay__ring" />
+            <div className="splash-overlay__logo">
+              <Plus size={28} />
+            </div>
+            <p className="splash-overlay__title">Loading Tasks</p>
+            <p className="splash-overlay__subtitle">Preparing task dashboard...</p>
+            <div className="splash-overlay__loader" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        </div>
+      }
+    >
       <TasksPageContent />
     </Suspense>
   );

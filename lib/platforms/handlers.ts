@@ -1,4 +1,14 @@
-import type { BasePlatformHandler, PlatformConfig, PlatformId } from './types';
+import type {
+  AccountInfo,
+  AnalyticsData,
+  AuthConfig,
+  AuthResponse,
+  BasePlatformHandler,
+  PlatformConfig,
+  PlatformId,
+  PostRequest,
+  PostResponse,
+} from './types';
 import { facebookHandler, facebookConfig } from './facebook';
 
 // Instagram Handler
@@ -17,35 +27,35 @@ class InstagramHandler implements BasePlatformHandler {
     supportsAnalytics: true,
   };
 
-  async authenticate(config) {
+  async authenticate(config: AuthConfig): Promise<AuthResponse> {
     return { success: true, accessToken: config.accessToken };
   }
 
-  async refreshAuth(refreshToken) {
+  async refreshAuth(_refreshToken: string): Promise<AuthResponse> {
     return { success: true };
   }
 
-  async revokeAuth(accessToken) {
+  async revokeAuth(_accessToken: string): Promise<boolean> {
     return true;
   }
 
-  async publishPost(post, token) {
+  async publishPost(_post: PostRequest, _token: string): Promise<PostResponse> {
     return { success: true, postId: `ig_${Date.now()}` };
   }
 
-  async schedulePost(post, token) {
+  async schedulePost(post: PostRequest, _token: string): Promise<PostResponse> {
     return { success: true, postId: `ig_${Date.now()}`, scheduledFor: post.scheduleTime };
   }
 
-  async editPost(postId, post, token) {
+  async editPost(postId: string, _post: PostRequest, _token: string): Promise<PostResponse> {
     return { success: true, postId };
   }
 
-  async deletePost(postId, token) {
+  async deletePost(_postId: string, _token: string): Promise<boolean> {
     return true;
   }
 
-  async getAccountInfo(token) {
+  async getAccountInfo(_token: string): Promise<AccountInfo | null> {
     return {
       id: 'ig_123456',
       username: 'demo_account',
@@ -54,7 +64,7 @@ class InstagramHandler implements BasePlatformHandler {
     };
   }
 
-  async getAnalytics(token, startDate, endDate) {
+  async getAnalytics(_token: string, _startDate: Date, _endDate: Date): Promise<AnalyticsData[]> {
     return [{ date: new Date(), posts: 10, engagements: 500, clicks: 250, reach: 5000, impressions: 10000 }];
   }
 }
@@ -325,35 +335,35 @@ class LinkedInHandler implements BasePlatformHandler {
     supportsAnalytics: true,
   };
 
-  async authenticate(config) {
+  async authenticate(config: AuthConfig): Promise<AuthResponse> {
     return { success: true, accessToken: config.accessToken };
   }
 
-  async refreshAuth(refreshToken) {
+  async refreshAuth(_refreshToken: string): Promise<AuthResponse> {
     return { success: true };
   }
 
-  async revokeAuth(accessToken) {
+  async revokeAuth(_accessToken: string): Promise<boolean> {
     return true;
   }
 
-  async publishPost(post, token) {
+  async publishPost(_post: PostRequest, _token: string): Promise<PostResponse> {
     return { success: true, postId: `li_${Date.now()}` };
   }
 
-  async schedulePost(post, token) {
+  async schedulePost(post: PostRequest, _token: string): Promise<PostResponse> {
     return { success: true, postId: `li_${Date.now()}`, scheduledFor: post.scheduleTime };
   }
 
-  async editPost(postId, post, token) {
+  async editPost(postId: string, _post: PostRequest, _token: string): Promise<PostResponse> {
     return { success: true, postId };
   }
 
-  async deletePost(postId, token) {
+  async deletePost(_postId: string, _token: string): Promise<boolean> {
     return true;
   }
 
-  async getAccountInfo(token) {
+  async getAccountInfo(_token: string): Promise<AccountInfo | null> {
     return {
       id: 'li_123456',
       username: 'demo_user',
@@ -362,7 +372,7 @@ class LinkedInHandler implements BasePlatformHandler {
     };
   }
 
-  async getAnalytics(token, startDate, endDate) {
+  async getAnalytics(_token: string, _startDate: Date, _endDate: Date): Promise<AnalyticsData[]> {
     return [{ date: new Date(), posts: 8, engagements: 400, clicks: 200, reach: 4000, impressions: 8000 }];
   }
 }

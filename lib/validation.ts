@@ -24,7 +24,7 @@ export function parseSort<T extends readonly string[]>(
   const sortBy = params.get('sortBy') ?? defaultBy;
   const sortDir = params.get('sortDir') ?? defaultDir;
   const schema = z.object({
-    sortBy: z.enum(allowed as [T[number], ...T]),
+    sortBy: z.enum([...allowed] as unknown as [T[number], ...T[number][]]),
     sortDir: z.enum(['asc', 'desc']),
   });
   return schema.safeParse({ sortBy, sortDir });

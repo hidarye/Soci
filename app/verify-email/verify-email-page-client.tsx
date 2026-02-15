@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { AuthShell } from '@/components/auth/auth-shell';
-import { WaitingSplash } from '@/components/layout/waiting-splash';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -127,11 +126,6 @@ export default function VerifyEmailPageClient({ token, queryEmail, queryCode }: 
 
   return (
     <AuthShell title="Email Verification" description="Confirm your account with the verification code.">
-      <WaitingSplash
-        active={state === 'loading'}
-        title="Verifying Email"
-        subtitle="Confirming your code and securing your account..."
-      />
       <div className="space-y-5">
         <p className="text-sm text-foreground" aria-live="polite">
           {message}

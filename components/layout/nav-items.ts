@@ -20,7 +20,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { href: '/', label: 'Dashboard', caption: 'System overview', icon: Home },
   { href: '/tasks', label: 'My Tasks', caption: 'Orchestrate pipelines', icon: Zap },
-  { href: '/tasks?create=1', label: 'Create Task', caption: 'Build automation', icon: Plus },
+  { href: '/tasks/new', label: 'Create Task', caption: 'Build automation', icon: Plus },
   { href: '/accounts', label: 'Accounts', caption: 'Connected platforms', icon: Users },
   { href: '/analytics', label: 'Analytics', caption: 'Performance insights', icon: BarChart3 },
   { href: '/executions', label: 'Executions', caption: 'Runtime history', icon: Database },
@@ -30,7 +30,7 @@ export const NAV_ITEMS: NavItem[] = [
 const ARABIC_NAV_TRANSLATIONS: Record<string, { label: string; caption: string }> = {
   '/': { label: 'لوحة التحكم', caption: 'نظرة عامة على النظام' },
   '/tasks': { label: 'مهامي', caption: 'إدارة مسارات الأتمتة' },
-  '/tasks?create=1': { label: 'إنشاء مهمة', caption: 'بناء أتمتة جديدة' },
+  '/tasks/new': { label: 'إنشاء مهمة', caption: 'بناء أتمتة جديدة' },
   '/accounts': { label: 'الحسابات', caption: 'المنصات المتصلة' },
   '/analytics': { label: 'التحليلات', caption: 'مؤشرات الأداء' },
   '/executions': { label: 'التنفيذات', caption: 'سجل التشغيل' },

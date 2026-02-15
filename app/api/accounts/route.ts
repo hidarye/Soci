@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
     const platformId = request.nextUrl.searchParams.get('platformId') || undefined
     const isActiveParam = request.nextUrl.searchParams.get('isActive')
     const isActive = isActiveParam === null ? undefined : isActiveParam === 'true'
+    const presentationOnly = request.nextUrl.searchParams.get('presentation') === '1'
 
     const result = await db.getUserAccountsPaged({
       userId: user.id,
@@ -45,12 +46,41 @@ export async function GET(request: NextRequest) {
       sortDir: sort.data.sortDir,
     })
     
+    const accounts = presentationOnly
+      ? result.accounts.map((account) => {
+          const credentials = (account.credentials || {}) as Record<string, any>
+          const accountInfo =
+            credentials && typeof credentials.accountInfo === 'object'
+              ? (credentials.accountInfo as Record<string, any>)
+              : {}
+          return {
+            id: account.id,
+            userId: account.userId,
+            platformId: account.platformId,
+            accountName: account.accountName,
+            accountUsername: account.accountUsername,
+            accountId: account.accountId,
+            isActive: account.isActive,
+            createdAt: account.createdAt,
+            updatedAt: account.updatedAt,
+            credentials: {
+              profileImageUrl:
+                accountInfo.profileImageUrl ||
+                credentials.profileImageUrl ||
+                credentials.avatarUrl ||
+                credentials.picture ||
+                undefined,
+            },
+          }
+        })
+      : result.accounts
+
     return NextResponse.json({
       success: true,
-      accounts: result.accounts,
+      accounts,
       total: result.total,
-      nextOffset: page.data.offset + result.accounts.length,
-      hasMore: page.data.offset + result.accounts.length < result.total,
+      nextOffset: page.data.offset + accounts.length,
+      hasMore: page.data.offset + accounts.length < result.total,
     })
   } catch (error) {
     console.error('[API] Error fetching accounts:', error)

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { StatCard } from '@/components/common/stat-card';
@@ -14,6 +14,7 @@ import { useLanguage } from '@/components/i18n/language-provider';
 
 export default function DashboardPage() {
   const { t } = useLanguage();
+  const hasLoadedOnceRef = useRef(false);
   const [stats, setStats] = useState({
     totalTasks: 0,
     totalAccounts: 0,
@@ -34,6 +35,9 @@ export default function DashboardPage() {
     stats.totalExecutions === 0;
 
   useEffect(() => {
+    if (hasLoadedOnceRef.current) return;
+    hasLoadedOnceRef.current = true;
+
     let cancelled = false;
     const controller = new AbortController();
     const cacheKey = 'dashboard:summary';
@@ -98,7 +102,7 @@ export default function DashboardPage() {
               Manage and automate your social media content across multiple platforms
             </p>
           </div>
-          <Link href="/tasks?create=1">
+          <Link href="/tasks/new">
             <Button size="lg" className="animate-float-soft">
               <Plus size={18} />
               {t('dashboard.launchNewAutomation', 'Launch New Automation')}
@@ -167,7 +171,7 @@ export default function DashboardPage() {
                   {
                     label: 'Create your first automation task',
                     done: stats.totalTasks > 0,
-                    href: '/tasks?create=1',
+                    href: '/tasks/new',
                   },
                   {
                     label: 'Run at least one successful execution',
@@ -223,7 +227,7 @@ export default function DashboardPage() {
                   <p className="text-muted-foreground mb-4">
                     No tasks created yet
                   </p>
-                  <Link href="/tasks?create=1">
+                  <Link href="/tasks/new">
                     <Button>
                       <Plus size={18} className="mr-2" />
                       Create First Task
@@ -335,7 +339,7 @@ export default function DashboardPage() {
                 Create your first task to start syncing content across platforms
               </p>
             </div>
-            <Link href="/tasks?create=1">
+            <Link href="/tasks/new">
               <Button size="lg">
                 <Plus size={18} />
                 Create New Task

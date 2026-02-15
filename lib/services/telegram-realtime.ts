@@ -19,6 +19,18 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeTelegramChatList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => normalizeString(item)).filter(Boolean))];
+  }
+  const raw = normalizeString(value);
+  if (!raw) return [];
+  if (raw.includes(',') || raw.includes('\n')) {
+    return [...new Set(raw.split(/[\n,]+/).map((item) => normalizeString(item)).filter(Boolean))];
+  }
+  return [raw];
+}
+
 function parseApiId(): number {
   const raw = String(process.env.API_ID || process.env.TELEGRAM_API_ID || '').trim();
   const parsed = Number(raw);
@@ -52,10 +64,24 @@ function resolveTelegramSession(account: PlatformAccount): string {
   return normalizeString(creds.sessionString) || normalizeString(account.accessToken);
 }
 
-function resolveTelegramSourceChat(account: PlatformAccount, task: Task): string {
+function resolveTelegramSourceChats(account: PlatformAccount, task: Task): string[] {
   const creds = (account.credentials as Record<string, unknown>) || {};
   const filters = (task.filters as Record<string, unknown>) || {};
-  return normalizeString(creds.chatId) || normalizeString(filters.telegramChatId);
+  const fromCreds = normalizeTelegramChatList(creds.chatId);
+  if (fromCreds.length > 0) return fromCreds;
+  const fromFiltersList = normalizeTelegramChatList((filters as any).telegramChatIds);
+  if (fromFiltersList.length > 0) return fromFiltersList;
+  return normalizeTelegramChatList(filters.telegramChatId);
+}
+
+function resolveTelegramTargetChats(account: PlatformAccount, task: Task): string[] {
+  const creds = (account.credentials as Record<string, unknown>) || {};
+  const transformations = (task.transformations as Record<string, unknown>) || {};
+  const fromCreds = normalizeTelegramChatList((creds as any).chatId);
+  if (fromCreds.length > 0) return fromCreds;
+  const fromTransformationsList = normalizeTelegramChatList((transformations as any).telegramTargetChatIds);
+  if (fromTransformationsList.length > 0) return fromTransformationsList;
+  return normalizeTelegramChatList((transformations as any).telegramTargetChatId);
 }
 
 function extensionFromMimeType(mimeType: string): string {
@@ -492,8 +518,8 @@ async function processTelegramTaskMessage(params: {
             };
           });
         } else if (target.platformId === 'telegram') {
-          const targetChatId = normalizeString((target.credentials as any)?.chatId);
-          if (!targetChatId) {
+          const targetChatIds = resolveTelegramTargetChats(target, task);
+          if (targetChatIds.length === 0) {
             throw new Error('Missing Telegram target chat ID');
           }
 
@@ -503,17 +529,25 @@ async function processTelegramTaskMessage(params: {
           if (isUserSession) {
             const targetClient = await createSessionClient(sessionString);
             try {
-              const message = await targetClient.sendMessage(targetChatId, {
-                message: text,
-              });
-              responseData = { messageId: message.id };
+              const messageIds: Array<string | number> = [];
+              for (const targetChatId of targetChatIds) {
+                const message = await targetClient.sendMessage(targetChatId, {
+                  message: text,
+                });
+                messageIds.push(message.id);
+              }
+              responseData = { messageIds, messageId: messageIds[0] };
             } finally {
               await targetClient.disconnect().catch(() => undefined);
             }
           } else {
             const botClient = new BotTelegramClient(String(target.accessToken || '').trim());
-            const message = await botClient.sendMessage(targetChatId, text);
-            responseData = { messageId: message.messageId };
+            const messageIds: Array<string | number> = [];
+            for (const targetChatId of targetChatIds) {
+              const message = await botClient.sendMessage(targetChatId, text);
+              messageIds.push(message.messageId);
+            }
+            responseData = { messageIds, messageId: messageIds[0] };
           }
         } else if (target.platformId === 'youtube') {
           const videos = mediaItems.filter((item) => item.kind === 'video');
@@ -739,13 +773,15 @@ export class TelegramRealtimeService {
           continue;
         }
 
-        const sourceChatId = resolveTelegramSourceChat(sourceAccount, task);
-        if (!sourceChatId) {
+        const sourceChatIds = resolveTelegramSourceChats(sourceAccount, task);
+        if (sourceChatIds.length === 0) {
           continue;
         }
 
         const chats = sourceChatsByAccountId.get(sourceAccountId) || new Set<string>();
-        chats.add(sourceChatId);
+        for (const sourceChatId of sourceChatIds) {
+          chats.add(sourceChatId);
+        }
         sourceChatsByAccountId.set(sourceAccountId, chats);
 
         const taskIds = taskIdsBySourceAccountId.get(sourceAccountId) || new Set<string>();
