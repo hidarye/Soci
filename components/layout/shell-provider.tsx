@@ -42,15 +42,18 @@ function readInitialShellState(): InitialShellState {
   const isTabletViewport = window.matchMedia('(min-width: 768px) and (max-width: 1023px)').matches;
 
   let sidebarCollapsed = root.dataset.shellSidebarCollapsed === '1';
-  if (!sidebarCollapsed) {
-    try {
-      sidebarCollapsed = window.localStorage.getItem(SHELL_SIDEBAR_KEY) === '1';
-    } catch {
-      // ignore storage failures
+  let hasStoredSidebarPreference = false;
+  try {
+    const rawStoredCollapsed = window.localStorage.getItem(SHELL_SIDEBAR_KEY);
+    if (rawStoredCollapsed === '1' || rawStoredCollapsed === '0') {
+      hasStoredSidebarPreference = true;
+      sidebarCollapsed = rawStoredCollapsed === '1';
     }
+  } catch {
+    // ignore storage failures
   }
-  if (isTabletViewport) {
-    sidebarCollapsed = true;
+  if (!hasStoredSidebarPreference) {
+    sidebarCollapsed = isTabletViewport;
   }
 
   let reducedMotion = root.getAttribute('data-reduced-motion') === 'true';
@@ -99,22 +102,6 @@ export function ShellProvider({ children }: { children: React.ReactNode }) {
     compactQuery.addEventListener('change', syncCompactViewport);
     return () => {
       compactQuery.removeEventListener('change', syncCompactViewport);
-    };
-  }, []);
-
-  React.useEffect(() => {
-    const tabletShellQuery = window.matchMedia('(min-width: 768px) and (max-width: 1023px)');
-    const syncTabletShell = () => {
-      // Keep tablet portrait shell compact to prevent header/content overlap.
-      if (tabletShellQuery.matches) {
-        setSidebarCollapsed(true);
-      }
-    };
-
-    syncTabletShell();
-    tabletShellQuery.addEventListener('change', syncTabletShell);
-    return () => {
-      tabletShellQuery.removeEventListener('change', syncTabletShell);
     };
   }, []);
 

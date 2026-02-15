@@ -40,16 +40,13 @@ export async function register() {
       logServerInfo('runtime', 'Global server error hooks registered');
     }
 
-    const shouldAutoStartBackgroundServices =
-      process.env.NODE_ENV === 'production' || process.env.SOCIALFLOW_START_BG_SERVICES_IN_DEV === '1';
-
-    if (shouldAutoStartBackgroundServices) {
+    if (process.env.NODE_ENV === 'production') {
       const { triggerBackgroundServicesRefresh } = await import('@/lib/services/background-services');
       triggerBackgroundServicesRefresh({ force: true });
     } else {
       logServerInfo(
         'runtime',
-        'Skipped background services auto-start in development (set SOCIALFLOW_START_BG_SERVICES_IN_DEV=1 to enable)'
+        'Skipped background services auto-start in development'
       );
     }
   }

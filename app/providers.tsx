@@ -8,7 +8,7 @@ import { RuntimeLocalizer } from '@/components/i18n/runtime-localizer';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <SessionProvider>
+    <SessionProvider refetchOnWindowFocus={false} refetchInterval={0} refetchWhenOffline={false}>
       <LanguageProvider>
         <RuntimeLocalizer />
         <ThemeProvider

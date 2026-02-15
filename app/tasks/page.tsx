@@ -12,8 +12,10 @@ import {
   Pause,
   ArrowRight,
   Loader2,
-  Clock3,
   Sparkles,
+  AlertTriangle,
+  BarChart3,
+  RotateCcw,
 } from 'lucide-react';
 
 import { Sidebar } from '@/components/layout/sidebar';
@@ -22,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/common/use-confirm-dialog';
 import { PlatformIcon } from '@/components/common/platform-icon';
 
@@ -31,48 +34,24 @@ import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { getCachedQuery, setCachedQuery } from '@/lib/client/query-cache';
 import { cn } from '@/lib/utils';
 
-const STATUS_META: Record<
-  Task['status'],
-  { label: string; tone: string; buttonLabel: string; runHint: string }
-> = {
+const STATUS_META: Record<Task['status'], { label: string; tone: string }> = {
   active: {
     label: 'Active',
     tone: 'status-pill--success',
-    buttonLabel: 'Pause',
-    runHint: 'Live routing',
   },
   paused: {
     label: 'Paused',
     tone: 'status-pill--neutral',
-    buttonLabel: 'Resume',
-    runHint: 'Stopped manually',
   },
   completed: {
     label: 'Completed',
     tone: 'status-pill--neutral',
-    buttonLabel: 'Activate',
-    runHint: 'Finished schedule',
   },
   error: {
     label: 'Error',
     tone: 'status-pill--error',
-    buttonLabel: 'Retry Mode',
-    runHint: 'Needs attention',
   },
 };
-
-function uniquePlatformIdsForAccounts(
-  accountIds: string[],
-  accountById: Record<string, PlatformAccount>
-): PlatformId[] {
-  const seen = new Set<PlatformId>();
-  for (const accountId of accountIds) {
-    const platformId = accountById[accountId]?.platformId as PlatformId | undefined;
-    if (!platformId) continue;
-    seen.add(platformId);
-  }
-  return [...seen];
-}
 
 function getRelativeLastRun(value?: Date | string | null): string {
   if (!value) return 'Never';
@@ -87,6 +66,46 @@ function getRelativeLastRun(value?: Date | string | null): string {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString();
+}
+
+function getSuccessRate(executionCount?: number, failureCount?: number): number {
+  const total = Math.max(0, Number(executionCount || 0));
+  const failed = Math.max(0, Number(failureCount || 0));
+  if (total <= 0) return 100;
+  const successful = Math.max(0, total - failed);
+  return Math.round((successful / total) * 100);
+}
+
+function getModeLabel(executionType?: Task['executionType']): string {
+  if (executionType === 'scheduled' || executionType === 'recurring') return 'Scheduled';
+  return 'Live routing';
+}
+
+const PLATFORM_LABELS: Record<PlatformId, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  twitter: 'X',
+  tiktok: 'TikTok',
+  youtube: 'YouTube',
+  telegram: 'Telegram',
+  linkedin: 'LinkedIn',
+};
+
+function uniquePlatformIdsForTask(task: Task, accountById: Record<string, PlatformAccount>): PlatformId[] {
+  const seen = new Set<PlatformId>();
+  for (const accountId of [...task.sourceAccounts, ...task.targetAccounts]) {
+    const platformId = accountById[accountId]?.platformId as PlatformId | undefined;
+    if (platformId) seen.add(platformId);
+  }
+  return [...seen];
+}
+
+function taskHasAuthWarning(task: Task, accountById: Record<string, PlatformAccount>): boolean {
+  for (const accountId of [...task.sourceAccounts, ...task.targetAccounts]) {
+    const account = accountById[accountId];
+    if (account && !account.isActive) return true;
+  }
+  return false;
 }
 
 function resolveAccountAvatar(account: PlatformAccount): string | null {
@@ -122,6 +141,179 @@ function accountDisplayName(account: PlatformAccount): string {
   );
 }
 
+function normalizeTelegramChatList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))];
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.includes(',') || raw.includes('\n')) {
+    return [...new Set(raw.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
+  }
+  return [raw];
+}
+
+function normalizeTelegramUsernameToken(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('@')) return raw.toLowerCase();
+  return `@${raw.toLowerCase()}`;
+}
+
+function parseTelegramChatToken(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^-?\d+$/.test(raw)) return raw;
+  if (raw.startsWith('@')) return raw.toLowerCase();
+  const normalized = raw.toLowerCase();
+  const withProtocol =
+    normalized.startsWith('http://') || normalized.startsWith('https://') ? normalized : `https://${normalized}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.hostname.includes('t.me') || parsed.hostname.includes('telegram.me')) {
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length === 0) return raw;
+      if (segments[0] === 'c' && segments[1] && /^\d+$/.test(segments[1])) {
+        return `-100${segments[1]}`;
+      }
+      if (/^[a-z0-9_]{4,}$/i.test(segments[0])) {
+        return normalizeTelegramUsernameToken(segments[0]);
+      }
+    }
+  } catch {
+    // ignore parse failures
+  }
+  return raw;
+}
+
+function parseChatCollectionFromCredentials(
+  credentials: Record<string, unknown>,
+  field: string
+): Array<{ id: string; title?: string }> {
+  const raw = credentials[field];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const entry = item as Record<string, unknown>;
+      const idCandidate = String(
+        entry.chatId ||
+          entry.chat_id ||
+          entry.id ||
+          entry.channelId ||
+          entry.channel_id ||
+          entry.peerId ||
+          ''
+      ).trim();
+      const usernameCandidate = String(entry.username || '').trim();
+      const id = parseTelegramChatToken(idCandidate || usernameCandidate);
+      if (!id) return null;
+      const title = String(
+        entry.title ||
+          entry.chatTitle ||
+          entry.chat_name ||
+          entry.chatName ||
+          entry.channelTitle ||
+          entry.name ||
+          usernameCandidate ||
+          ''
+      ).trim();
+      return { id, title: title || undefined };
+    })
+    .filter(Boolean) as Array<{ id: string; title?: string }>;
+}
+
+function collectTelegramChatTitleMap(accounts: PlatformAccount[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const account of accounts) {
+    if (account.platformId !== 'telegram') continue;
+    const credentials = ((account.credentials || {}) as Record<string, unknown>) || {};
+    const singleIds = normalizeTelegramChatList(credentials.chatId).map(parseTelegramChatToken).filter(Boolean);
+    const singleTitle = String(
+      credentials.chatTitle ||
+        credentials.chat_name ||
+        credentials.chatName ||
+        credentials.channelTitle ||
+        credentials.channel_name ||
+        credentials.channelName ||
+        ''
+    ).trim();
+    for (const chatId of singleIds) {
+      if (singleTitle && !map.has(chatId)) map.set(chatId, singleTitle);
+      if (!map.has(chatId) && account.accountName) map.set(chatId, account.accountName);
+    }
+
+    const records = [
+      ...parseChatCollectionFromCredentials(credentials, 'availableChats'),
+      ...parseChatCollectionFromCredentials(credentials, 'selectedChats'),
+      ...parseChatCollectionFromCredentials(credentials, 'chats'),
+      ...parseChatCollectionFromCredentials(credentials, 'chatList'),
+      ...parseChatCollectionFromCredentials(credentials, 'channels'),
+    ];
+    for (const record of records) {
+      if (!record.title || map.has(record.id)) continue;
+      map.set(record.id, record.title);
+    }
+  }
+  return map;
+}
+
+function formatTelegramChatLabel(chatId: string, chatTitleMap: Map<string, string>): string {
+  const normalized = parseTelegramChatToken(chatId);
+  const title = chatTitleMap.get(normalized);
+  if (title) return title;
+  if (normalized.startsWith('@')) return normalized;
+  return normalized;
+}
+
+function resolveTelegramChatsForTask(task: Task, accounts: PlatformAccount[], side: 'source' | 'target') {
+  const chatTitleMap = collectTelegramChatTitleMap(accounts);
+  const values = new Set<string>();
+
+  for (const account of accounts) {
+    if (account.platformId !== 'telegram') continue;
+    const credentials = (account.credentials || {}) as Record<string, unknown>;
+    for (const chatId of normalizeTelegramChatList(credentials.chatId)) {
+      const normalized = parseTelegramChatToken(chatId);
+      if (normalized) values.add(normalized);
+    }
+  }
+
+  if (side === 'source') {
+    const filters = (task.filters || {}) as Record<string, unknown>;
+    for (const chatId of normalizeTelegramChatList((filters as any).telegramChatIds)) {
+      const normalized = parseTelegramChatToken(chatId);
+      if (normalized) values.add(normalized);
+    }
+    const single = parseTelegramChatToken(String((filters as any).telegramChatId || ''));
+    if (single) values.add(single);
+  } else {
+    const transformations = (task.transformations || {}) as Record<string, unknown>;
+    for (const chatId of normalizeTelegramChatList((transformations as any).telegramTargetChatIds)) {
+      const normalized = parseTelegramChatToken(chatId);
+      if (normalized) values.add(normalized);
+    }
+    const single = parseTelegramChatToken(String((transformations as any).telegramTargetChatId || ''));
+    if (single) values.add(single);
+  }
+
+  return [...values].map((chatId) => ({
+    id: chatId,
+    label: formatTelegramChatLabel(chatId, chatTitleMap),
+  }));
+}
+
+function normalizeAccountMap(raw: unknown): Record<string, PlatformAccount> {
+  if (!raw || typeof raw !== 'object') return {};
+  const entries = Object.entries(raw as Record<string, unknown>);
+  const normalized: Record<string, PlatformAccount> = {};
+  for (const [accountId, value] of entries) {
+    if (!value || typeof value !== 'object') continue;
+    normalized[accountId] = value as PlatformAccount;
+  }
+  return normalized;
+}
+
 function TasksPageContent() {
   const router = useRouter();
   const { confirm, ConfirmDialog } = useConfirmDialog();
@@ -131,6 +323,9 @@ function TasksPageContent() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'paused' | 'completed' | 'error'>('all');
+  const [platformFilter, setPlatformFilter] = useState<'all' | PlatformId>('all');
+  const [lastRunFilter, setLastRunFilter] = useState<'all' | '24h' | '7d' | 'never'>('all');
+  const [issueFilter, setIssueFilter] = useState<'all' | 'errors' | 'warnings'>('all');
   const [sortBy, setSortBy] = useState<'createdAt' | 'status' | 'name'>('createdAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [accountById, setAccountById] = useState<Record<string, PlatformAccount>>({});
@@ -140,6 +335,7 @@ function TasksPageContent() {
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [runningTaskIds, setRunningTaskIds] = useState<Record<string, boolean>>({});
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Record<string, boolean>>({});
 
   const pageSize = 50;
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
@@ -151,6 +347,7 @@ function TasksPageContent() {
     const cacheKey = `tasks:list:${pageSize}:0:${debouncedSearchTerm}:${statusFilter}:${sortBy}:${sortDir}`;
     const cached = getCachedQuery<{
       tasks: Task[];
+      accountsById?: Record<string, PlatformAccount>;
       nextOffset: number;
       hasMore: boolean;
     }>(cacheKey, 20_000);
@@ -160,6 +357,9 @@ function TasksPageContent() {
       setFilteredTasks(cached.tasks);
       setOffset(cached.nextOffset);
       setHasMore(cached.hasMore);
+      if (cached.accountsById) {
+        setAccountById(cached.accountsById);
+      }
       setIsLoadingTasks(false);
     } else {
       setIsLoadingTasks(true);
@@ -177,14 +377,23 @@ function TasksPageContent() {
         if (cancelled) return;
 
         const list = data.tasks || [];
+        const nextAccountMap = normalizeAccountMap(data.accountsById);
         const nextOffset = data.nextOffset || 0;
         const nextHasMore = Boolean(data.hasMore);
 
         setTasks(list);
         setFilteredTasks(list);
+        if (Object.keys(nextAccountMap).length > 0) {
+          setAccountById(nextAccountMap);
+        }
         setOffset(nextOffset);
         setHasMore(nextHasMore);
-        setCachedQuery(cacheKey, { tasks: list, nextOffset, hasMore: nextHasMore });
+        setCachedQuery(cacheKey, {
+          tasks: list,
+          accountsById: nextAccountMap,
+          nextOffset,
+          hasMore: nextHasMore,
+        });
       } catch (error) {
         if ((error as Error)?.name === 'AbortError') return;
         console.error('[TasksPage] Error loading tasks:', error);
@@ -201,31 +410,37 @@ function TasksPageContent() {
   }, [pageSize, debouncedSearchTerm, statusFilter, sortBy, sortDir]);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadAccounts() {
-      try {
-        const res = await fetch('/api/accounts?limit=300&offset=0&presentation=1');
-        const data = await res.json();
-        if (!res.ok || !data.success) return;
-        if (cancelled) return;
-        const map: Record<string, PlatformAccount> = {};
-        for (const account of (data.accounts || []) as PlatformAccount[]) {
-          map[account.id] = account;
-        }
-        setAccountById(map);
-      } catch {
-        // non-blocking
+    const now = Date.now();
+    const next = tasks.filter((task) => {
+      if (platformFilter !== 'all') {
+        const taskPlatforms = uniquePlatformIdsForTask(task, accountById);
+        if (!taskPlatforms.includes(platformFilter)) return false;
       }
-    }
-    void loadAccounts();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
-  useEffect(() => {
-    setFilteredTasks(tasks);
-  }, [tasks]);
+      if (lastRunFilter === 'never' && task.lastExecuted) return false;
+      if (lastRunFilter === '24h') {
+        const ts = task.lastExecuted ? new Date(task.lastExecuted).getTime() : 0;
+        if (!ts || now - ts > 24 * 60 * 60 * 1000) return false;
+      }
+      if (lastRunFilter === '7d') {
+        const ts = task.lastExecuted ? new Date(task.lastExecuted).getTime() : 0;
+        if (!ts || now - ts > 7 * 24 * 60 * 60 * 1000) return false;
+      }
+
+      if (issueFilter === 'errors' && task.status !== 'error') return false;
+      if (issueFilter === 'warnings' && !taskHasAuthWarning(task, accountById)) return false;
+      return true;
+    });
+    setFilteredTasks(next);
+    setSelectedTaskIds((prev) => {
+      const nextSelected: Record<string, boolean> = {};
+      const visible = new Set(next.map((task) => task.id));
+      for (const [taskId, selected] of Object.entries(prev)) {
+        if (selected && visible.has(taskId)) nextSelected[taskId] = true;
+      }
+      return nextSelected;
+    });
+  }, [tasks, platformFilter, lastRunFilter, issueFilter, accountById]);
 
   const handleLoadMore = async () => {
     if (isLoadingMore) return;
@@ -238,8 +453,12 @@ function TasksPageContent() {
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load tasks');
       const next = [...tasks, ...(data.tasks || [])];
+      const nextAccountMap = normalizeAccountMap(data.accountsById);
       setTasks(next);
       setFilteredTasks(next);
+      if (Object.keys(nextAccountMap).length > 0) {
+        setAccountById((prev) => ({ ...prev, ...nextAccountMap }));
+      }
       setOffset(data.nextOffset || offset);
       setHasMore(Boolean(data.hasMore));
     } catch (error) {
@@ -312,14 +531,64 @@ function TasksPageContent() {
     }
   };
 
+  const handleRetryTask = async (task: Task) => {
+    await handleRunNow(task);
+  };
+
+  const selectedCount = Object.values(selectedTaskIds).filter(Boolean).length;
+  const allVisibleSelected = filteredTasks.length > 0 && filteredTasks.every((task) => selectedTaskIds[task.id]);
+  const availablePlatformFilters = [...new Set(tasks.flatMap((task) => uniquePlatformIdsForTask(task, accountById)))]
+    .filter(Boolean)
+    .sort() as PlatformId[];
+
+  const handleBulkPause = async () => {
+    const selected = filteredTasks.filter((task) => selectedTaskIds[task.id]);
+    if (selected.length === 0) return;
+    try {
+      await Promise.all(
+        selected.map(async (task) => {
+          if (task.status === 'paused') return;
+          const res = await fetch(`/api/tasks/${task.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'paused' }),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.success) throw new Error(data.error || `Failed to pause task ${task.name}`);
+        })
+      );
+      setTasks((prev) =>
+        prev.map((task) => (selectedTaskIds[task.id] ? { ...task, status: 'paused' as Task['status'] } : task))
+      );
+      toast.success(`Paused ${selected.length} task(s)`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to pause selected tasks');
+    }
+  };
+
+  const handleBulkRun = async () => {
+    const selected = filteredTasks.filter((task) => selectedTaskIds[task.id]);
+    if (selected.length === 0) return;
+    try {
+      await Promise.all(
+        selected.map(async (task) => {
+          const res = await fetch(`/api/tasks/${task.id}/run`, { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok || !data.success) throw new Error(data.error || `Failed to run task ${task.name}`);
+        })
+      );
+      setTasks((prev) =>
+        prev.map((task) => (selectedTaskIds[task.id] ? { ...task, lastExecuted: new Date() } : task))
+      );
+      toast.success(`Ran ${selected.length} task(s)`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to run selected tasks');
+    }
+  };
+
   const activeTasksCount = filteredTasks.filter((task) => task.status === 'active').length;
   const pausedTasksCount = filteredTasks.filter((task) => task.status === 'paused').length;
-  const completedTasksCount = filteredTasks.filter((task) => task.status === 'completed').length;
   const erroredTasksCount = filteredTasks.filter((task) => task.status === 'error').length;
-  const totalRoutes = filteredTasks.reduce(
-    (sum, task) => sum + Math.max(1, task.sourceAccounts.length) * Math.max(1, task.targetAccounts.length),
-    0
-  );
   const isInitialLoading = isLoadingTasks && tasks.length === 0;
 
   return (
@@ -341,16 +610,14 @@ function TasksPageContent() {
                 <>
                   <span className="kpi-pill">Loading tasks...</span>
                   <span className="kpi-pill">Loading active...</span>
-                  <span className="kpi-pill">Loading paused...</span>
+                  <span className="kpi-pill">Loading failed...</span>
                 </>
               ) : (
                 <>
-                  <span className="kpi-pill">{filteredTasks.length} visible</span>
                   <span className="kpi-pill">{activeTasksCount} active</span>
                   <span className="kpi-pill">{pausedTasksCount} paused</span>
-                  <span className="kpi-pill">{completedTasksCount} completed</span>
-                  <span className="kpi-pill">{erroredTasksCount} error</span>
-                  <span className="kpi-pill">{totalRoutes} routes</span>
+                  <span className="kpi-pill">{erroredTasksCount} failed</span>
+                  <span className="kpi-pill">{filteredTasks.length} tasks</span>
                 </>
               )}
             </div>
@@ -369,10 +636,10 @@ function TasksPageContent() {
 
         <Card className="mb-6 animate-fade-up sticky-toolbar">
           <CardHeader>
-            <CardTitle>Search Tasks</CardTitle>
+            <CardTitle>Task Search & Filters</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
               <div className="relative">
                 <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -382,55 +649,90 @@ function TasksPageContent() {
                   className="pl-10"
                 />
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <Select value={statusFilter} onValueChange={(value: any) => setStatusFilter(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All statuses</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="paused">Paused</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="error">Error</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={`${sortBy}:${sortDir}`}
-                  onValueChange={(value: string) => {
-                    const [by, dir] = value.split(':') as any;
-                    setSortBy(by);
-                    setSortDir(dir);
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Sort by" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="createdAt:desc">Date (Newest)</SelectItem>
-                    <SelectItem value="createdAt:asc">Date (Oldest)</SelectItem>
-                    <SelectItem value="status:asc">Status (A→Z)</SelectItem>
-                    <SelectItem value="status:desc">Status (Z→A)</SelectItem>
-                    <SelectItem value="name:asc">Name (A→Z)</SelectItem>
-                    <SelectItem value="name:desc">Name (Z→A)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <Select value={statusFilter} onValueChange={(value: any) => setStatusFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="paused">Paused</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="error">Error</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={platformFilter} onValueChange={(value: any) => setPlatformFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Platform" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All platforms</SelectItem>
+                  {availablePlatformFilters.map((platformId) => (
+                    <SelectItem key={platformId} value={platformId}>
+                      {PLATFORM_LABELS[platformId] || platformId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={lastRunFilter} onValueChange={(value: any) => setLastRunFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Last run" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Any run</SelectItem>
+                  <SelectItem value="24h">Last 24h</SelectItem>
+                  <SelectItem value="7d">Last 7d</SelectItem>
+                  <SelectItem value="never">Never ran</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={issueFilter} onValueChange={(value: any) => setIssueFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Issues" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All tasks</SelectItem>
+                  <SelectItem value="errors">Errors only</SelectItem>
+                  <SelectItem value="warnings">Auth warnings</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {(searchTerm || statusFilter !== 'all') && (
+              {(searchTerm ||
+                statusFilter !== 'all' ||
+                platformFilter !== 'all' ||
+                lastRunFilter !== 'all' ||
+                issueFilter !== 'all') && (
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => {
                     setSearchTerm('');
                     setStatusFilter('all');
+                    setPlatformFilter('all');
+                    setLastRunFilter('all');
+                    setIssueFilter('all');
                   }}
                 >
                   Clear Filters
                 </Button>
               )}
+              {selectedCount > 0 ? (
+                <>
+                  <span className="kpi-pill">{selectedCount} selected</span>
+                  <Button size="sm" variant="outline" onClick={() => void handleBulkRun()}>
+                    <Play size={14} />
+                    Run Selected
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void handleBulkPause()}>
+                    <Pause size={14} />
+                    Pause Selected
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedTaskIds({})}>
+                    Clear Selection
+                  </Button>
+                </>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -465,179 +767,234 @@ function TasksPageContent() {
           </Card>
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-4">
+            <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setSelectedTaskIds((prev) => {
+                    const next = { ...prev };
+                    for (const task of filteredTasks) {
+                      if (checked) next[task.id] = true;
+                      else delete next[task.id];
+                    }
+                    return next;
+                  });
+                }}
+                aria-label="Select all visible tasks"
+                className="h-4 w-4 rounded border-border"
+              />
+              <span>Select all visible tasks</span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               {filteredTasks.map((task) => {
                 const statusMeta = STATUS_META[task.status] || STATUS_META.paused;
-                const sourceAccounts = task.sourceAccounts
-                  .map((id) => accountById[id])
-                  .filter(Boolean) as PlatformAccount[];
-                const targetAccounts = task.targetAccounts
-                  .map((id) => accountById[id])
-                  .filter(Boolean) as PlatformAccount[];
-                const sourcePlatforms = uniquePlatformIdsForAccounts(task.sourceAccounts, accountById);
-                const targetPlatforms = uniquePlatformIdsForAccounts(task.targetAccounts, accountById);
                 const routeCount =
                   Math.max(1, task.sourceAccounts.length) * Math.max(1, task.targetAccounts.length);
+                const sourcePlatformIds = [
+                  ...new Set(
+                    task.sourceAccounts.map((id) => accountById[id]?.platformId as PlatformId | undefined).filter(Boolean)
+                  ),
+                ] as PlatformId[];
+                const targetPlatformIds = [
+                  ...new Set(
+                    task.targetAccounts.map((id) => accountById[id]?.platformId as PlatformId | undefined).filter(Boolean)
+                  ),
+                ] as PlatformId[];
+                const sourceVisiblePlatforms = sourcePlatformIds.slice(0, 3);
+                const targetVisiblePlatforms = targetPlatformIds.slice(0, 3);
+                const sourceOverflow = Math.max(0, sourcePlatformIds.length - sourceVisiblePlatforms.length);
+                const targetOverflow = Math.max(0, targetPlatformIds.length - targetVisiblePlatforms.length);
+                const successRate = getSuccessRate(task.executionCount, task.failureCount);
+                const lastRunLabel = getRelativeLastRun(task.lastExecuted);
+                const modeLabel = getModeLabel(task.executionType);
+                const hasAuthWarning = taskHasAuthWarning(task, accountById);
+                const runtimeState = runningTaskIds[task.id] ? 'Running' : task.status === 'error' ? 'Error' : 'Idle';
+                const descriptionText =
+                  task.status === 'error'
+                    ? `Error: ${String(task.lastError || '').trim() || 'Failed to fetch data'}`
+                    : String(task.description || '').trim() || 'No description provided.';
+                const toneBorderClass =
+                  task.status === 'active'
+                    ? 'border-l-emerald-500'
+                    : task.status === 'error'
+                      ? 'border-l-red-500'
+                      : task.status === 'completed'
+                        ? 'border-l-sky-500'
+                        : 'border-l-amber-500';
 
                 return (
                   <Card
                     key={task.id}
-                    className="animate-fade-up border-border/70 bg-card/70 transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/45 hover:shadow-[0_18px_42px_-30px_color-mix(in_oklch,var(--primary)_65%,transparent)]"
+                    className={cn(
+                      'animate-fade-up border-l-4 border-border/70 bg-card shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md',
+                      toneBorderClass
+                    )}
                   >
                     <CardContent className="p-6">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="flex-1">
-                          <div className="mb-2 flex flex-wrap items-center gap-3">
-                            <h3 className="text-lg font-semibold text-foreground">{task.name}</h3>
-                            <span className={cn('status-pill', statusMeta.tone)}>{statusMeta.label}</span>
-                            <span className="rounded-full border border-border/70 bg-card/65 px-2.5 py-1 text-[11px] text-muted-foreground">
-                              {statusMeta.runHint}
-                            </span>
-                          </div>
-
-                          <p className="mb-4 leading-relaxed text-muted-foreground">
-                            {task.description?.trim() || 'No description provided.'}
-                          </p>
-
-                          <div className="mb-3 inline-flex items-center gap-2 rounded-xl border border-border/70 bg-card/55 px-3 py-1.5 text-xs text-muted-foreground">
-                            <span className="inline-flex items-center gap-1">
-                              {sourcePlatforms.slice(0, 3).map((platformId) => (
-                                <PlatformIcon
-                                  key={`flow-src-${task.id}-${platformId}`}
-                                  platformId={platformId as PlatformId}
-                                  size={13}
-                                />
-                              ))}
-                              {sourcePlatforms.length > 3 ? <span>+{sourcePlatforms.length - 3}</span> : null}
-                            </span>
-                            <ArrowRight size={12} className="opacity-70" />
-                            <span className="inline-flex items-center gap-1">
-                              {targetPlatforms.slice(0, 3).map((platformId) => (
-                                <PlatformIcon
-                                  key={`flow-dst-${task.id}-${platformId}`}
-                                  platformId={platformId as PlatformId}
-                                  size={13}
-                                />
-                              ))}
-                              {targetPlatforms.length > 3 ? <span>+{targetPlatforms.length - 3}</span> : null}
-                            </span>
-                            <span className="text-foreground/80">{routeCount} route(s)</span>
-                          </div>
-
-                          <div className="grid gap-3 text-sm md:grid-cols-2">
-                            <div>
-                              <p className="mb-1.5 text-muted-foreground">Source</p>
-                              <div className="flex flex-wrap gap-2">
-                                {sourceAccounts.length === 0 ? (
-                                  <span className="text-xs text-muted-foreground">
-                                    {task.sourceAccounts.length > 0
-                                      ? 'Loading source account details...'
-                                      : 'No source accounts'}
-                                  </span>
-                                ) : (
-                                  sourceAccounts.map((account) => {
-                                    const avatar = resolveAccountAvatar(account);
-                                    return (
-                                      <span
-                                        key={`src-account-${task.id}-${account.id}`}
-                                        className="inline-flex max-w-full items-center gap-2 rounded-full border border-border/70 bg-card/75 px-2 py-1"
-                                      >
-                                        {avatar ? (
-                                          <img
-                                            src={avatar}
-                                            alt={accountDisplayName(account)}
-                                            className="h-5 w-5 rounded-full object-cover"
-                                            loading="lazy"
-                                          />
-                                        ) : (
-                                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
-                                            {accountDisplayName(account).charAt(0).toUpperCase()}
-                                          </span>
-                                        )}
-                                        <span className="truncate text-xs font-medium text-foreground">
-                                          {accountDisplayName(account)}
-                                        </span>
-                                        <PlatformIcon platformId={account.platformId as PlatformId} size={12} />
-                                      </span>
-                                    );
-                                  })
+                      <div className="space-y-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 flex-1 items-start gap-3">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(selectedTaskIds[task.id])}
+                              onChange={(event) =>
+                                setSelectedTaskIds((prev) => ({ ...prev, [task.id]: event.target.checked }))
+                              }
+                              aria-label={`Select task ${task.name}`}
+                              className="mt-1 h-4 w-4 rounded border-border"
+                            />
+                            <div className="min-w-0">
+                              <h3 className="truncate text-xl font-semibold tracking-tight text-foreground">{task.name}</h3>
+                              <p
+                                className={cn(
+                                  'mt-2 line-clamp-1 text-sm text-muted-foreground',
+                                  task.status === 'error' && 'inline-flex items-center gap-1.5 text-destructive'
                                 )}
-                              </div>
-                            </div>
-
-                            <div>
-                              <p className="mb-1.5 text-muted-foreground">Target</p>
-                              <div className="flex flex-wrap gap-2">
-                                {targetAccounts.length === 0 ? (
-                                  <span className="text-xs text-muted-foreground">
-                                    {task.targetAccounts.length > 0
-                                      ? 'Loading target account details...'
-                                      : 'No target accounts'}
-                                  </span>
-                                ) : (
-                                  targetAccounts.map((account) => {
-                                    const avatar = resolveAccountAvatar(account);
-                                    return (
-                                      <span
-                                        key={`target-account-${task.id}-${account.id}`}
-                                        className="inline-flex max-w-full items-center gap-2 rounded-full border border-border/70 bg-card/75 px-2 py-1"
-                                      >
-                                        {avatar ? (
-                                          <img
-                                            src={avatar}
-                                            alt={accountDisplayName(account)}
-                                            className="h-5 w-5 rounded-full object-cover"
-                                            loading="lazy"
-                                          />
-                                        ) : (
-                                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
-                                            {accountDisplayName(account).charAt(0).toUpperCase()}
-                                          </span>
-                                        )}
-                                        <span className="truncate text-xs font-medium text-foreground">
-                                          {accountDisplayName(account)}
-                                        </span>
-                                        <PlatformIcon platformId={account.platformId as PlatformId} size={12} />
-                                      </span>
-                                    );
-                                  })
-                                )}
-                              </div>
+                              >
+                                {task.status === 'error' ? <AlertTriangle size={14} /> : null}
+                                <span>{descriptionText}</span>
+                              </p>
                             </div>
                           </div>
 
-                          <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-card/60 px-2.5 py-1 text-[11px] text-muted-foreground">
-                            <Clock3 size={12} />
-                            Last run: <span className="text-foreground/85">{getRelativeLastRun(task.lastExecuted)}</span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className={cn('status-pill', statusMeta.tone)}>{statusMeta.label.toUpperCase()}</span>
+                            <span className="rounded-full border border-border/70 bg-muted/40 px-2.5 py-1 text-[11px] text-muted-foreground">
+                              {modeLabel}
+                            </span>
+                            {hasAuthWarning ? (
+                              <span className="rounded-full border border-amber-300/60 bg-amber-100/70 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                                OAuth Warning
+                              </span>
+                            ) : null}
                           </div>
                         </div>
 
-                        <div className="ml-0 flex flex-wrap items-center gap-2 sm:ml-4 sm:self-start">
-                          <Button variant="outline" size="icon" onClick={() => handleToggleStatus(task)} title={statusMeta.buttonLabel}>
-                            {task.status === 'active' ? <Pause size={18} /> : <Play size={18} />}
-                          </Button>
+                        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/65 bg-background/60 p-3">
+                          {sourceVisiblePlatforms.length > 0 ? (
+                            sourceVisiblePlatforms.map((platformId, index) => (
+                              <span key={`source-platform-${task.id}-${platformId}`} className="inline-flex items-center gap-2">
+                                {index > 0 ? <span className="text-xs text-muted-foreground">+</span> : null}
+                                <span
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border/70 bg-card"
+                                  title={PLATFORM_LABELS[platformId] || platformId}
+                                >
+                                  <PlatformIcon platformId={platformId} size={17} />
+                                </span>
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No source</span>
+                          )}
+                          {sourceOverflow > 0 ? (
+                            <span className="rounded-full border border-border/70 px-2 py-0.5 text-xs text-muted-foreground">
+                              +{sourceOverflow}
+                            </span>
+                          ) : null}
+                          <span className="mx-1 inline-flex h-8 w-8 items-center justify-center rounded-full bg-muted/45 text-muted-foreground">
+                            <ArrowRight size={16} />
+                          </span>
+                          {targetVisiblePlatforms.length > 0 ? (
+                            targetVisiblePlatforms.map((platformId, index) => (
+                              <span key={`target-platform-${task.id}-${platformId}`} className="inline-flex items-center gap-2">
+                                {index > 0 ? <span className="text-xs text-muted-foreground">+</span> : null}
+                                <span
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border/70 bg-card"
+                                  title={PLATFORM_LABELS[platformId] || platformId}
+                                >
+                                  <PlatformIcon platformId={platformId} size={17} />
+                                </span>
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No target</span>
+                          )}
+                          {targetOverflow > 0 ? (
+                            <span className="rounded-full border border-border/70 px-2 py-0.5 text-xs text-muted-foreground">
+                              +{targetOverflow}
+                            </span>
+                          ) : null}
+                        </div>
 
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <span className="rounded-full border border-border/70 px-2.5 py-1">
+                              Sources: {task.sourceAccounts.length}
+                            </span>
+                            <span className="rounded-full border border-border/70 px-2.5 py-1">
+                              Targets: {task.targetAccounts.length}
+                            </span>
+                            <span className="rounded-full border border-border/70 px-2.5 py-1">Routes: {routeCount}</span>
+                            <span className="rounded-full border border-border/70 px-2.5 py-1">Last run: {lastRunLabel}</span>
+                            <span className="rounded-full border border-border/70 px-2.5 py-1">
+                              Transferred: {task.executionCount || 0}
+                            </span>
+                            <span className="rounded-full border border-border/70 px-2.5 py-1">Success: {successRate}%</span>
+                            <span
+                              className={cn(
+                                'rounded-full border px-2.5 py-1',
+                                runtimeState === 'Running'
+                                  ? 'border-blue-300/70 bg-blue-100/70 text-blue-700'
+                                  : runtimeState === 'Error'
+                                    ? 'border-red-300/70 bg-red-100/70 text-red-700'
+                                    : 'border-border/70'
+                              )}
+                            >
+                              {runtimeState}
+                            </span>
+                          </div>
+                          <Switch
+                            checked={task.status === 'active'}
+                            onCheckedChange={() => handleToggleStatus(task)}
+                            aria-label={task.status === 'active' ? 'Pause task' : 'Activate task'}
+                          />
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {task.status === 'error' ? (
+                            <Button variant="outline" size="sm" onClick={() => void handleRetryTask(task)}>
+                              <RotateCcw size={14} />
+                              Retry
+                            </Button>
+                          ) : null}
+                          <Button
+                            size="sm"
+                            variant={task.status === 'active' ? 'secondary' : 'default'}
+                            onClick={() => handleToggleStatus(task)}
+                          >
+                            {task.status === 'active' ? <Pause size={14} /> : <Play size={14} />}
+                            {task.status === 'active' ? 'Pause' : 'Run'}
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => router.push(`/tasks/${task.id}/edit`)}>
+                            <Edit2 size={14} />
+                            Edit
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleRunNow(task)}
-                            disabled={Boolean(runningTaskIds[task.id])}
+                            className="text-destructive hover:bg-destructive/10"
+                            onClick={() => void handleDelete(task.id)}
                           >
-                            {runningTaskIds[task.id] ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-                            Run
+                            <Trash2 size={14} />
+                            Delete
                           </Button>
-
-                          <Button variant="outline" size="icon" onClick={() => router.push(`/tasks/${task.id}/edit`)}>
-                            <Edit2 size={18} />
-                          </Button>
-
                           <Button
                             variant="outline"
-                            size="icon"
-                            onClick={() => handleDelete(task.id)}
-                            className="text-destructive hover:bg-destructive/10"
+                            size="sm"
+                            onClick={() => router.push(`/executions?search=${encodeURIComponent(task.name)}`)}
                           >
-                            <Trash2 size={18} />
+                            <BarChart3 size={14} />
+                            Logs
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => router.push(`/tasks/${task.id}/edit?section=advanced`)}
+                          >
+                            Advanced
                           </Button>
                         </div>
                       </div>

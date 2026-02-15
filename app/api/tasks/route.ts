@@ -5,9 +5,17 @@ import { getAuthUser } from '@/lib/auth';
 import { z } from 'zod';
 import { getClientKey, rateLimit } from '@/lib/rate-limit';
 import { parsePagination, parseSort } from '@/lib/validation';
-import { triggerBackgroundServicesRefresh } from '@/lib/services/background-services';
 
 export const runtime = 'nodejs';
+
+async function triggerBackgroundRefresh(options?: { force?: boolean }) {
+  try {
+    const { triggerBackgroundServicesRefresh } = await import('@/lib/services/background-services');
+    triggerBackgroundServicesRefresh(options);
+  } catch {
+    // non-blocking: task CRUD should not fail if background service bootstrap fails
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,7 +23,7 @@ export async function GET(request: NextRequest) {
     if (!user?.id) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
-    triggerBackgroundServicesRefresh();
+    void triggerBackgroundRefresh();
     const page = parsePagination(request.nextUrl.searchParams);
     if (!page.success) {
       return NextResponse.json({ success: false, error: 'Invalid pagination' }, { status: 400 });
@@ -36,9 +44,29 @@ export async function GET(request: NextRequest) {
       sortDir: sort.data.sortDir,
     });
 
+    const userAccounts = await db.getUserAccounts(user.id);
+    const accountsById = Object.fromEntries(
+      userAccounts.map((account) => [
+        account.id,
+        {
+          id: account.id,
+          userId: account.userId,
+          platformId: account.platformId,
+          accountName: account.accountName,
+          accountUsername: account.accountUsername,
+          accountId: account.accountId,
+          isActive: account.isActive,
+          createdAt: account.createdAt,
+          updatedAt: account.updatedAt,
+          credentials: account.credentials,
+        },
+      ])
+    );
+
     return NextResponse.json({
       success: true,
       tasks: result.tasks,
+      accountsById,
       total: result.total,
       nextOffset: page.data.offset + result.tasks.length,
       hasMore: page.data.offset + result.tasks.length < result.total,
@@ -59,7 +87,7 @@ export async function POST(request: NextRequest) {
     if (!user?.id) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
-    triggerBackgroundServicesRefresh();
+    void triggerBackgroundRefresh();
     const schema = z.object({
       name: z.string().min(1),
       description: z.string().optional(),
@@ -162,7 +190,7 @@ export async function POST(request: NextRequest) {
       failureCount: 0,
     });
 
-    triggerBackgroundServicesRefresh({ force: true });
+    void triggerBackgroundRefresh({ force: true });
     return NextResponse.json({ success: true, task }, { status: 201 });
   } catch (error) {
     console.error('[API] Error creating task:', error);

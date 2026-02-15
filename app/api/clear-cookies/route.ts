@@ -58,11 +58,7 @@ function getSafeRedirectPath(request: NextRequest, appOrigin: string): string {
   return fallback;
 }
 
-export async function GET(request: NextRequest) {
-  const appOrigin = getAppOrigin(request);
-  const redirectPath = getSafeRedirectPath(request, appOrigin);
-  const response = NextResponse.redirect(`${appOrigin}${redirectPath}`);
-
+function applyCookieClears(request: NextRequest, response: NextResponse): NextResponse {
   const incomingCookies = request.cookies.getAll();
   const cleared = new Set<string>();
 
@@ -98,4 +94,16 @@ export async function GET(request: NextRequest) {
   }
 
   return response;
+}
+
+export async function GET(request: NextRequest) {
+  const appOrigin = getAppOrigin(request);
+  const redirectPath = getSafeRedirectPath(request, appOrigin);
+  const response = NextResponse.redirect(`${appOrigin}${redirectPath}`);
+  return applyCookieClears(request, response);
+}
+
+export async function POST(request: NextRequest) {
+  const response = NextResponse.json({ success: true });
+  return applyCookieClears(request, response);
 }

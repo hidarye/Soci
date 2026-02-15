@@ -70,6 +70,7 @@
     "telegram-bot-api": "2.0.1",
     "uuid": "^13.0.0",
     "vaul": "^1.1.2",
+    "websocket": "^1.0.35",
     "zod": "3.25.76"
   },
   "devDependencies": {

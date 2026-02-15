@@ -10,12 +10,27 @@ function isRecoverableClientLoadError(value: unknown): boolean {
   return (
     text.includes('chunkloaderror') ||
     text.includes('loading chunk') ||
-    text.includes('failed to fetch dynamically imported module') ||
-    text.includes('failed to load resource')
+    text.includes('failed to fetch dynamically imported module')
+  );
+}
+
+function isChunkAssetUrl(url: string): boolean {
+  const normalized = String(url || '').toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('/_next/') &&
+    (normalized.includes('/chunks/') || normalized.includes('/app/')) &&
+    (normalized.endsWith('.js') || normalized.endsWith('.mjs') || normalized.endsWith('.css'))
   );
 }
 
 export function ClientRecovery() {
+  // Dev mode can trigger many non-fatal transient resource events (HMR, blocked assets, etc.).
+  // Recovery reloads are only useful in production for broken chunk/module states.
+  if (process.env.NODE_ENV !== 'production') {
+    return null;
+  }
+
   useEffect(() => {
     const recover = () => {
       try {
@@ -30,7 +45,17 @@ export function ClientRecovery() {
     };
 
     const onError = (event: ErrorEvent) => {
-      if (isRecoverableClientLoadError(event.message) || isRecoverableClientLoadError(event.error)) {
+      const target = event.target as (EventTarget & { src?: string; href?: string; tagName?: string }) | null;
+      const resourceUrl = target?.src || target?.href || '';
+      const resourceTag = String(target?.tagName || '').toUpperCase();
+      const chunkResourceFailure =
+        (resourceTag === 'SCRIPT' || resourceTag === 'LINK') && isChunkAssetUrl(resourceUrl);
+
+      if (
+        chunkResourceFailure ||
+        isRecoverableClientLoadError(event.message) ||
+        isRecoverableClientLoadError(event.error)
+      ) {
         recover();
       }
     };

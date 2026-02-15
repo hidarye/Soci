@@ -17,6 +17,11 @@ const LanguageContext = React.createContext<LanguageContextValue | null>(null);
 function detectLocale(): Locale {
   if (typeof window === 'undefined') return DEFAULT_LOCALE;
 
+  const rootLocale = document.documentElement.getAttribute('data-locale');
+  if (rootLocale === 'en' || rootLocale === 'ar') {
+    return rootLocale;
+  }
+
   try {
     const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
     if (stored === 'en' || stored === 'ar') {
@@ -26,17 +31,11 @@ function detectLocale(): Locale {
     // ignore storage failures
   }
 
-  const navigatorLanguage = window.navigator.language.toLowerCase();
-  if (navigatorLanguage.startsWith('ar')) return 'ar';
   return DEFAULT_LOCALE;
 }
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = React.useState<Locale>(DEFAULT_LOCALE);
-
-  React.useEffect(() => {
-    setLocaleState(detectLocale());
-  }, []);
+  const [locale, setLocaleState] = React.useState<Locale>(() => detectLocale());
 
   React.useEffect(() => {
     const dir = locale === 'ar' ? 'rtl' : 'ltr';

@@ -6,9 +6,17 @@ import { getClientKey, rateLimit } from '@/lib/rate-limit'
 import { z } from 'zod'
 import { parsePagination, parseSort } from '@/lib/validation'
 import { getTelegramUserProfileFromSession } from '@/lib/telegram-user-auth';
-import { triggerBackgroundServicesRefresh } from '@/lib/services/background-services';
 
 export const runtime = 'nodejs';
+
+async function triggerBackgroundRefresh(options?: { force?: boolean }) {
+  try {
+    const { triggerBackgroundServicesRefresh } = await import('@/lib/services/background-services');
+    triggerBackgroundServicesRefresh(options);
+  } catch {
+    // non-blocking for account CRUD APIs
+  }
+}
 
 
 export async function GET(request: NextRequest) {
@@ -93,7 +101,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    triggerBackgroundServicesRefresh();
+    void triggerBackgroundRefresh();
     const limiter = rateLimit(`accounts:post:${getClientKey(request)}`, 30, 60_000)
     if (!limiter.ok) {
       return NextResponse.json({ success: false, error: 'Too many requests' }, { status: 429 })
@@ -205,7 +213,7 @@ export async function POST(request: NextRequest) {
             credentials: mergedCredentials,
             isActive: safe.isActive ?? true,
           })
-          triggerBackgroundServicesRefresh({ force: true });
+          void triggerBackgroundRefresh({ force: true });
           return NextResponse.json({ success: true, account: updated ?? existingTelegram }, { status: 200 })
         }
         safe.credentials = sessionCredentials;
@@ -231,7 +239,7 @@ export async function POST(request: NextRequest) {
       isActive: safe.isActive ?? true,
     })
 
-    triggerBackgroundServicesRefresh({ force: true });
+    void triggerBackgroundRefresh({ force: true });
     return NextResponse.json({ success: true, account }, { status: 201 })
   } catch (error) {
     console.error('[API] Error creating account:', error)

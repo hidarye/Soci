@@ -183,8 +183,16 @@ function HeaderContent() {
   const handleLogout = () => {
     void (async () => {
       await clearClientSessionArtifacts();
-      const redirectTarget = encodeURIComponent('/login?forceLogin=1&loggedOut=1');
-      window.location.replace(`/api/clear-cookies?redirect=${redirectTarget}`);
+      try {
+        await fetch('/api/clear-cookies', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+      } catch {
+        // Continue with redirect even if cookie-clear request fails.
+      }
+      window.location.replace('/login?forceLogin=1&loggedOut=1');
     })();
   };
 

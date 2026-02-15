@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Activity,
@@ -230,6 +230,16 @@ function SidebarContent() {
 }
 
 export function Sidebar() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return null;
+  }
+
   return (
     <Suspense fallback={<aside className="shell-sidebar surface-card hidden h-screen w-[var(--shell-sidebar-width)] overflow-hidden border-r border-sidebar-border/80 md:fixed md:top-0 md:z-30 md:[inset-inline-start:0] md:block" style={{ borderInlineEndWidth: 'var(--shell-sidebar-border-width)' }} />}>
       <SidebarContent />

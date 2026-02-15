@@ -30,6 +30,7 @@ export default async function LoginPage({ searchParams }: PageProps) {
   const rawCallback = readParam(resolvedSearchParams, 'callbackUrl');
   const callbackUrl = normalizeCallbackPath(rawCallback);
   const email = readParam(resolvedSearchParams, 'email');
+  const loggedOut = readParam(resolvedSearchParams, 'loggedOut') === '1';
   const verified = readParam(resolvedSearchParams, 'verified') === '1';
   const reset = readParam(resolvedSearchParams, 'reset') === '1';
   const registered = readParam(resolvedSearchParams, 'registered') === '1';
@@ -38,6 +39,7 @@ export default async function LoginPage({ searchParams }: PageProps) {
     <LoginPageClient
       callbackUrl={callbackUrl || '/'}
       queryEmail={email}
+      loggedOut={loggedOut}
       verified={verified}
       reset={reset}
       registered={registered}

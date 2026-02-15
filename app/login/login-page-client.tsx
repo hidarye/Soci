@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { signIn } from 'next-auth/react';
@@ -18,9 +19,25 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function readRememberPreferences() {
+  if (typeof window === 'undefined') {
+    return { rememberEnabled: false, rememberedEmail: '' };
+  }
+
+  try {
+    return {
+      rememberEnabled: window.localStorage.getItem(REMEMBER_ENABLED_KEY) === '1',
+      rememberedEmail: window.localStorage.getItem(REMEMBER_EMAIL_KEY) || '',
+    };
+  } catch {
+    return { rememberEnabled: false, rememberedEmail: '' };
+  }
+}
+
 type LoginPageClientProps = {
   callbackUrl: string;
   queryEmail?: string;
+  loggedOut?: boolean;
   verified?: boolean;
   reset?: boolean;
   registered?: boolean;
@@ -29,18 +46,26 @@ type LoginPageClientProps = {
 export default function LoginPageClient({
   callbackUrl,
   queryEmail,
+  loggedOut,
   verified,
   reset,
   registered,
 }: LoginPageClientProps) {
+  const router = useRouter();
   const { locale, t } = useLanguage();
   const isArabic = locale === 'ar';
   const normalizedQueryEmail = String(queryEmail || '').trim().toLowerCase();
   const hasQueryEmail = Boolean(normalizedQueryEmail && isValidEmail(normalizedQueryEmail));
-  const [email, setEmail] = useState(hasQueryEmail ? normalizedQueryEmail : '');
+  const [email, setEmail] = useState(() => {
+    if (hasQueryEmail) return normalizedQueryEmail;
+    const { rememberEnabled, rememberedEmail } = readRememberPreferences();
+    return rememberEnabled ? rememberedEmail : '';
+  });
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(false);
-  const [rememberPrefsReady, setRememberPrefsReady] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => {
+    const { rememberEnabled } = readRememberPreferences();
+    return rememberEnabled;
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
@@ -55,22 +80,15 @@ export default function LoginPageClient({
   const isBusy = loading || redirecting;
 
   useEffect(() => {
-    try {
-      const rememberEnabled = window.localStorage.getItem(REMEMBER_ENABLED_KEY) === '1';
-      const rememberedEmail = window.localStorage.getItem(REMEMBER_EMAIL_KEY) || '';
-      setRememberMe(rememberEnabled);
-      // If the user navigated here with a specific email in the URL, prefer that.
-      if (!hasQueryEmail && rememberEnabled && rememberedEmail) {
-        setEmail(rememberedEmail);
-      }
-    } finally {
-      setRememberPrefsReady(true);
-    }
-  }, [hasQueryEmail]);
-
-  useEffect(() => {
     const messages: string[] = [];
 
+    if (loggedOut) {
+      messages.push(
+        isArabic
+          ? 'تم تسجيل الخروج بنجاح.'
+          : 'You signed out successfully.'
+      );
+    }
     if (verified) {
       messages.push(isArabic ? 'تم التحقق من البريد الإلكتروني. يمكنك تسجيل الدخول الآن.' : 'Email verified. You can sign in now.');
     }
@@ -84,7 +102,24 @@ export default function LoginPageClient({
     if (messages.length > 0) {
       setInfoMessage(messages[0]);
     }
-  }, [isArabic, registered, reset, verified]);
+  }, [isArabic, loggedOut, registered, reset, verified]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    let changed = false;
+
+    for (const key of ['forceLogin', 'loggedOut']) {
+      if (!url.searchParams.has(key)) continue;
+      url.searchParams.delete(key);
+      changed = true;
+    }
+
+    if (!changed) return;
+    const search = url.searchParams.toString();
+    const nextUrl = `${url.pathname}${search ? `?${search}` : ''}${url.hash}`;
+    window.history.replaceState(window.history.state, '', nextUrl || '/login');
+  }, []);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,7 +195,8 @@ export default function LoginPageClient({
         return fallback;
       }
     })();
-    window.location.replace(redirectTarget);
+    router.replace(redirectTarget);
+    router.refresh();
   };
 
   const resendVerification = async () => {
@@ -267,21 +303,17 @@ export default function LoginPageClient({
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          {rememberPrefsReady ? (
-            <label htmlFor="login-remember-me" className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
-              <input
-                id="login-remember-me"
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="h-4 w-4 rounded border-input accent-primary"
-                disabled={isBusy}
-              />
-              {isArabic ? 'تذكرني' : 'Remember me'}
-            </label>
-          ) : (
-            <span className="h-5" />
-          )}
+          <label htmlFor="login-remember-me" className="inline-flex cursor-pointer items-center gap-2 text-muted-foreground">
+            <input
+              id="login-remember-me"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 rounded border-input accent-primary"
+              disabled={isBusy}
+            />
+            {isArabic ? 'تذكرني' : 'Remember me'}
+          </label>
           <Link href="/forgot-password" className="text-xs font-medium text-primary underline-offset-4 hover:underline">
             {isArabic ? 'نسيت كلمة المرور؟' : 'Forgot password?'}
           </Link>
